@@ -44,7 +44,10 @@ func _ready() -> void:
 		var c: Dictionary = cars[start + i]
 		var m := CarModel.new()
 		add_child(m)
-		m.build(c, int(c["paint"]))
+		var tune := {}
+		if args.size() > 3 and args[3] == "tuned":
+			tune = {"wing": 3 + i % 2, "front": 1 + i % 2, "skirts": 1, "rear": 1, "hood": 1 + i % 2, "rims": 1 + i % 4, "rim_color": 1 + i % 4}
+		m.build(c, int(c["paint"]), tune)
 		m.position = Vector3((i % 5) * 6.0, 0, (i / 5) * 7.0)
 		m.rotation.y = -0.75
 		var l := Label3D.new()
@@ -61,7 +64,8 @@ func _ready() -> void:
 	for i in 10:
 		await get_tree().process_frame
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png(out.path_join("models_%d.png" % start))
+	var suffix := "_tuned" if args.size() > 3 and args[3] == "tuned" else ""
+	get_viewport().get_texture().get_image().save_png(out.path_join("models_%d%s.png" % [start, suffix]))
 	# крупный план
 	cam.fov = 35
 	for k in mini(count, 5):
@@ -71,5 +75,5 @@ func _ready() -> void:
 		for i in 3:
 			await get_tree().process_frame
 		await RenderingServer.frame_post_draw
-		get_viewport().get_texture().get_image().save_png(out.path_join("model_%d.png" % (start + k)))
+		get_viewport().get_texture().get_image().save_png(out.path_join("model_%d%s.png" % [start + k, suffix]))
 	get_tree().quit()

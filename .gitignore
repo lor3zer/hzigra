@@ -4,3 +4,5 @@ build/
 *.aab
 *.keystore
 export_credentials.cfg
+tools/.build/
+__pycache__/

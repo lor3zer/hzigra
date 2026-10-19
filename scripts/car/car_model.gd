@@ -7,7 +7,7 @@ extends Node3D
 ## детали (фары, фонари, выхлоп, антикрыло, диски) добавляются отдельно.
 ## Машина смотрит в -Z, начало координат — центр на уровне земли.
 
-const SECTIONS := 44
+const SECTIONS := 30
 
 ## Профили: [t, значение], t = 0 — нос, 1 — корма.
 ## belt — высота линии плеча (доля H), width — полуширина (доля W/2),
@@ -76,6 +76,19 @@ const STYLES := {
 		"head": "slim", "tail": "strip", "exhaust": "center", "wing": 3, "fin": true},
 }
 
+## Тюнинг: одинаковый набор для всех машин (0 — заводской вариант).
+const TUNING := [
+	["wing", "Антикрыло", ["Заводское", "Без крыла", "Спойлер", "GT-крыло", "Большое крыло"]],
+	["front", "Передний бампер", ["Заводской", "Сплиттер", "Агрессивный"]],
+	["skirts", "Пороги", ["Заводские", "Карбоновые"]],
+	["rear", "Задний бампер", ["Заводской", "Диффузор"]],
+	["hood", "Капот", ["Заводской", "С жабрами", "Карбоновый"]],
+	["rims", "Диски", ["Заводские", "5 спиц", "Многоспицевые", "Сетка", "Турбина"]],
+	["rim_color", "Цвет дисков", ["Заводской", "Серебро", "Чёрный", "Золото", "Графит"]],
+]
+const RIM_TYPES := ["", "five", "multi", "mesh", "turbine"]
+const RIM_COLOR_KEYS := ["", "silver", "black", "gold", "gunmetal"]
+
 const RIM_COLORS := {"silver": Color(0.8, 0.81, 0.84), "black": Color(0.07, 0.07, 0.08),
 	"gold": Color(0.82, 0.64, 0.26), "gunmetal": Color(0.3, 0.32, 0.35)}
 
@@ -103,6 +116,11 @@ var _H := 1.25
 var _c := 0.13
 var _wr := 0.34
 var _tw := 0.27
+var _tune: Dictionary = {}
+
+
+func tune_value(key: String) -> int:
+	return int(_tune.get(key, 0))
 
 
 # ---------------------------------------------------------------- материалы
@@ -138,9 +156,23 @@ static func shared(key: String) -> StandardMaterial3D:
 		"chrome":
 			m = _m(Color(0.85, 0.86, 0.9), 0.12, 1.0)
 		"tire":
-			m = _m(Color(0.06, 0.06, 0.065), 0.92)
+			m = _m(Color(0.75, 0.75, 0.75), 0.92)
+			m.albedo_texture = Track.tex("tire.png")
+			m.uv1_scale = Vector3(1, 6, 1)
 		"head":
 			m = _glow(Color(1.0, 0.97, 0.88), 2.2)
+			m.albedo_texture = Track.tex("headlight.png")
+			m.emission_texture = Track.tex("headlight.png")
+		"carbon":
+			m = _m(Color(1, 1, 1), 0.3, 0.3)
+			m.albedo_texture = Track.tex("carbon.png")
+			m.uv1_triplanar = true
+			m.uv1_scale = Vector3(6, 6, 6)
+		"grille":
+			m = _m(Color(1, 1, 1), 0.6, 0.2)
+			m.albedo_texture = Track.tex("grille.png")
+			m.uv1_triplanar = true
+			m.uv1_scale = Vector3(8, 8, 8)
 		"drl":
 			m = _glow(Color(0.85, 0.92, 1.0), 3.0)
 		"plate":
@@ -328,21 +360,28 @@ func _build_body() -> Dictionary:
 			var corners := [[i, k], [i, k1], [i + 1, k1], [i + 1, k]]
 			var vs: Array = []
 			var ns: Array = []
+			var uvs: Array = []
 			for cnr in corners:
 				var ii: int = cnr[0]
 				var j: int = cnr[1]
 				vs.append(rings[ii][j])
+				var v := float(j) / RING
+				if j == 0 and k == RING - 1:
+					v = 1.0
+				uvs.append(Vector2(float(secs[ii]["t"]), v))
+				# на капоте и крышке багажника рёбра 6/7 тоже сглаживаем — без полос
+				var smooth: bool = SMOOTH[j] or (j in [6, 7, 9, 10] and float(secs[ii]["g"]) < 0.5)
 				var nsum := Vector3.ZERO
 				for sec in [ii - 1, ii]:
 					if sec < 0 or sec >= SECTIONS - 1:
 						continue
 					nsum += qn[sec][k]
-					if SMOOTH[j]:
+					if smooth:
 						var other := (k - 1 + RING) % RING if j == k else (k + 1) % RING
 						nsum += qn[sec][other]
 				nsum *= sign
 				ns.append(nsum.normalized() if nsum.length_squared() > 1e-12 else fn)
-			_emit_quad(tools, mat, vs, ns, fn)
+			_emit_quad(tools, mat, vs, ns, fn, uvs)
 
 	# торцы: нос и корма
 	for end in [0, SECTIONS - 1]:
@@ -355,7 +394,9 @@ func _build_body() -> Dictionary:
 		for k in RING:
 			var a := ring[k]
 			var b := ring[(k + 1) % RING]
-			_emit_tri(tools, "paint" if PANEL[k] != "dark" else "dark", [center, a, b], [fn, fn, fn], fn)
+			var tu := 0.0 if end == 0 else 1.0
+			_emit_tri(tools, "paint" if PANEL[k] != "dark" else "dark", [center, a, b], [fn, fn, fn], fn,
+				[Vector2(tu, 0.5), Vector2(tu, float(k) / RING), Vector2(tu, float(k + 1) / RING)])
 
 	var mesh := ArrayMesh.new()
 	var slots := {}
@@ -366,7 +407,56 @@ func _build_body() -> Dictionary:
 			slots[key] = mesh.get_surface_count() - 1
 			if key != "paint":
 				mesh.surface_set_material(slots[key], shared(key))
-	return {"mesh": mesh, "slots": slots}
+	return {"mesh": mesh, "slots": slots, "detail": _detail_texture()}
+
+
+## Текстура деталей кузова (оттенки серого, умножается на цвет краски):
+## швы бамперов, капота и дверей, ручки, лючок бака, тень порогов.
+## u — вдоль машины (t), v — по кольцу сечения (полосы по 8 px на панель).
+func _detail_texture() -> ImageTexture:
+	var W := 256
+	var H := 128
+	var img := Image.create(W, H, false, Image.FORMAT_RGB8)
+	img.fill(Color(1, 1, 1))
+	var cab: Array = _st["cabin"]
+	var side_end: float = cab[2] + (cab[3] - cab[2]) * 0.5
+	var doors := int(_st.get("doors", 2))
+	var b_pillar: float = lerpf(cab[1], side_end, 0.6 if doors == 2 else 0.45)
+	var shade := func(x0: int, x1: int, y0: int, y1: int, k: float):
+		for x in range(maxi(x0, 0), mini(x1, W)):
+			for y in range(maxi(y0, 0), mini(y1, H)):
+				var c := img.get_pixel(x, y)
+				img.set_pixel(x, y, c * k)
+	var both := func(t0: float, t1: float, band0: int, band1: int, k: float, y_from := 0, y_to := 8):
+		# одна и та же деталь справа (панели 3..7) и зеркально слева (15 - k)
+		for band in range(band0, band1 + 1):
+			for b in [band, 15 - band]:
+				shade.call(int(t0 * W), int(t1 * W) + 1, b * 8 + y_from, b * 8 + y_to, k)
+	# тень порогов и низа боковины
+	both.call(0.0, 1.0, 3, 3, 0.72)
+	both.call(0.0, 1.0, 4, 4, 0.92, 0, 3)
+	# швы бамперов
+	both.call(0.075, 0.075, 3, 6, 0.45)
+	both.call(0.925, 0.925, 3, 6, 0.45)
+	# шов капота у лобового стекла и по краям
+	both.call(cab[0] - 0.02, cab[0] - 0.02, 6, 7, 0.5)
+	both.call(0.08, cab[0] - 0.02, 7, 7, 0.6, 0, 1)
+	# двери
+	var d0: float = cab[0] + 0.005
+	both.call(d0, d0, 3, 5, 0.45)
+	both.call(b_pillar, b_pillar, 3, 5, 0.45)
+	if doors == 4:
+		var d2: float = lerpf(cab[1], side_end, 0.85)
+		both.call(d2, d2, 3, 5, 0.45)
+	both.call(d0, b_pillar, 4, 4, 0.55, 0, 1)
+	both.call(b_pillar - 0.045, b_pillar - 0.025, 5, 5, 0.35, 3, 5)   # ручка
+	# лючок бака справа
+	shade.call(int(0.8 * W), int(0.8 * W) + 5, 5 * 8 + 1, 5 * 8 + 6, 0.6)
+	# крышка багажника
+	if cab[3] < 0.9:
+		both.call(cab[3] + 0.01, cab[3] + 0.01, 6, 7, 0.5)
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
 
 
 func _tool(tools: Dictionary, key: String) -> SurfaceTool:
@@ -377,12 +467,12 @@ func _tool(tools: Dictionary, key: String) -> SurfaceTool:
 	return tools[key]
 
 
-func _emit_quad(tools: Dictionary, key: String, vs: Array, ns: Array, fn: Vector3) -> void:
-	_emit_tri(tools, key, [vs[0], vs[1], vs[2]], [ns[0], ns[1], ns[2]], fn)
-	_emit_tri(tools, key, [vs[0], vs[2], vs[3]], [ns[0], ns[2], ns[3]], fn)
+func _emit_quad(tools: Dictionary, key: String, vs: Array, ns: Array, fn: Vector3, uvs: Array) -> void:
+	_emit_tri(tools, key, [vs[0], vs[1], vs[2]], [ns[0], ns[1], ns[2]], fn, [uvs[0], uvs[1], uvs[2]])
+	_emit_tri(tools, key, [vs[0], vs[2], vs[3]], [ns[0], ns[2], ns[3]], fn, [uvs[0], uvs[2], uvs[3]])
 
 
-func _emit_tri(tools: Dictionary, key: String, vs: Array, ns: Array, fn: Vector3) -> void:
+func _emit_tri(tools: Dictionary, key: String, vs: Array, ns: Array, fn: Vector3, uvs: Array) -> void:
 	var st := _tool(tools, key)
 	var order := [0, 1, 2]
 	# лицевые грани в Godot — по часовой стрелке, если смотреть снаружи
@@ -390,6 +480,7 @@ func _emit_tri(tools: Dictionary, key: String, vs: Array, ns: Array, fn: Vector3
 		order = [0, 2, 1]
 	for o in order:
 		st.set_normal(ns[o])
+		st.set_uv(uvs[o])
 		st.add_vertex(vs[o])
 
 
@@ -436,7 +527,12 @@ func _patch(t0: float, t1: float, u0: float, u1: float, side: float, lift := 0.0
 			if n.dot(avg) < 0.0:
 				n = -n
 			st.set_normal(n)
-			Track.quad(st, p0 + avg * lift, p1 + avg * lift, p2 + avg * lift, p3 + avg * lift, n)
+			var tu0 := float(b) / nu
+			var tu1 := float(b + 1) / nu
+			var tv0 := float(a) / nt
+			var tv1 := float(a + 1) / nt
+			Track.quad(st, p0 + avg * lift, p1 + avg * lift, p2 + avg * lift, p3 + avg * lift, n,
+				PackedVector2Array([Vector2(tu0, tv0), Vector2(tu1, tv0), Vector2(tu1, tv1), Vector2(tu0, tv1)]))
 	return st.commit()
 
 
@@ -476,13 +572,17 @@ static func style_of(def: Dictionary) -> Dictionary:
 	return st
 
 
-func build(def: Dictionary, paint_index: int) -> void:
+func build(def: Dictionary, paint_index: int, tune: Dictionary = {}) -> void:
 	for c in get_children():
 		c.queue_free()
 	wheels.clear()
 	steer_pivots.clear()
 
 	_st = style_of(def)
+	_tune = tune
+	var wt := tune_value("wing")
+	if wt > 0:
+		_st["wing"] = [0, 0, 1, 2, 3][wt]
 	_L = def["len"]
 	_W = def["wid"]
 	_H = def["hgt"]
@@ -498,6 +598,7 @@ func build(def: Dictionary, paint_index: int) -> void:
 	var cached: Dictionary = _body_cache[key]
 
 	var paint := _m(CarDB.paint_color(paint_index), 0.18, 0.6)
+	paint.albedo_texture = cached["detail"]
 	body = Node3D.new()
 	add_child(body)
 	var bmi := MeshInstance3D.new()
@@ -523,15 +624,15 @@ func _build_details(paint: StandardMaterial3D) -> void:
 	# сплиттер, решётка, диффузор, номер
 	_part(body, _box(Vector3(_W * 0.86, 0.04, 0.3)), dark, Vector3(0, _c + 0.02, zf + 0.08))
 	var grille_w: float = float(front["w"]) * 1.25
-	_part(body, _box(Vector3(grille_w, (float(front["belt"]) - _c) * 0.38, 0.06)), dark,
+	_part(body, _box(Vector3(grille_w, (float(front["belt"]) - _c) * 0.38, 0.06)), shared("grille"),
 		Vector3(0, _c + (float(front["belt"]) - _c) * 0.3, zf - 0.005))
 	_part(body, _box(Vector3(_W * 0.8, 0.14, 0.4)), dark, Vector3(0, _c + 0.07, zr - 0.12))
-	for i in 5:
-		_part(body, _box(Vector3(0.03, 0.16, 0.36)), dark, Vector3(-_W * 0.3 + i * _W * 0.15, _c + 0.05, zr - 0.08))
 	_part(body, _box(Vector3(0.52, 0.12, 0.02)), shared("plate"), Vector3(0, _c + (float(tail["belt"]) - _c) * 0.45, zr + 0.012))
 
 	# фары — накладки на скруглённых углах носа
 	brake_lights = _glow(Color(0.9, 0.02, 0.03), 1.2)
+	brake_lights.albedo_texture = Track.tex("taillight.png")
+	brake_lights.emission_texture = Track.tex("taillight.png")
 	var head := shared("head")
 	for s: float in [-1.0, 1.0]:
 		match _st.get("head", "slim"):
@@ -635,6 +736,37 @@ func _build_details(paint: StandardMaterial3D) -> void:
 			_part(body, CarModel.frustum(0.36, 0.5, 0.2, 0.2, 0.16, 0.12), paint, Vector3(s * 0.32, float(sc["belt"]) - 0.02, float(sc["z"]) + 0.55))
 		_part(body, _box(Vector3(0.4, 0.04, 0.2)), shared("interior"), Vector3(-0.32, float(sc["belt"]) + 0.12, float(sc["z"]) - 0.45))
 
+	# ---- тюнинг ----
+	var carbon := shared("carbon")
+	match tune_value("front"):
+		1:
+			_part(body, _box(Vector3(_W * 0.94, 0.03, 0.3)), carbon, Vector3(0, _c + 0.01, zf + 0.12))
+		2:
+			_part(body, _box(Vector3(_W * 0.98, 0.035, 0.38)), carbon, Vector3(0, _c + 0.01, zf + 0.1))
+			for sd: float in [-1.0, 1.0]:
+				var nc := _surf(0.05, 4.3, sd)
+				for k in 2:
+					_part(body, _box(Vector3(0.28, 0.02, 0.14)), carbon, nc + Vector3(sd * 0.08, 0.08 + k * 0.12, 0.0), Vector3(0, 0, sd * (0.25 + k * 0.1)))
+	if tune_value("skirts") == 1:
+		var ax: Array = _st["axles"]
+		var z0: float = -_L * 0.5 + float(ax[0]) * _L + _wr + 0.12
+		var z1: float = -_L * 0.5 + float(ax[1]) * _L - _wr - 0.12
+		var sm := _sec((float(ax[0]) + float(ax[1])) * 0.5)
+		for sd: float in [-1.0, 1.0]:
+			_part(body, _box(Vector3(0.08, 0.1, z1 - z0)), carbon, Vector3(sd * float(sm["w"]) * 0.985, _c + 0.05, (z0 + z1) * 0.5))
+	if tune_value("rear") == 1:
+		_part(body, _box(Vector3(_W * 0.86, 0.05, 0.65)), carbon, Vector3(0, _c + 0.02, zr - 0.2))
+		for i in 4:
+			_part(body, _box(Vector3(0.025, 0.24, 0.55)), carbon, Vector3(-_W * 0.27 + i * _W * 0.18, _c + 0.12, zr - 0.18))
+		_part(body, _box(Vector3(_W * 0.7, 0.04, 0.12)), carbon, Vector3(0, float(tail["belt"]) - 0.02, zr + 0.02), Vector3(0.3, 0, 0))
+	match tune_value("hood"):
+		1:
+			for sd: float in [-1.0, 1.0]:
+				_part(body, _patch(0.12, 0.2, 6.4, 7.3, sd, 0.01), shared("grille"), Vector3.ZERO)
+		2:
+			for sd: float in [-1.0, 1.0]:
+				_part(body, _patch(0.06, float(cab[0]) - 0.025, 6.15, 8.0, sd, 0.006), carbon, Vector3.ZERO)
+
 	# антикрыло
 	var wing: int = int(_st.get("wing", 0))
 	var wr := _sec(0.93)
@@ -660,7 +792,12 @@ static var _wheel_cache := {}
 
 func _build_wheels(def: Dictionary) -> void:
 	var rim_type: String = def.get("rim", "five")
-	var rim_col: Color = RIM_COLORS.get(def.get("rim_color", "silver"), RIM_COLORS["silver"])
+	if tune_value("rims") > 0:
+		rim_type = RIM_TYPES[tune_value("rims")]
+	var rim_key: String = def.get("rim_color", "silver")
+	if tune_value("rim_color") > 0:
+		rim_key = RIM_COLOR_KEYS[tune_value("rim_color")]
+	var rim_col: Color = RIM_COLORS.get(rim_key, RIM_COLORS["silver"])
 	var rim_mat := _m(rim_col, 0.25, 0.85)
 	var cal_mat := _m(def.get("caliper", Color(0.8, 0.08, 0.06)), 0.4, 0.2)
 	var rim_r := _wr * 0.72

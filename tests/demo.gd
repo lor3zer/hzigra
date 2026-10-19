@@ -12,6 +12,7 @@ func _ready() -> void:
 	Game.settings["camera"] = 0
 	Game.settings["sound"] = true
 	Game.settings["volume"] = 0.8
+	Game.settings["music"] = 0.5
 	Game.apply_audio()
 	Game.last_race = {"track": track_id, "laps": 3, "opponents": 5, "difficulty": 2, "reverse": false, "tod": (2 if track_id == "city" else 1), "collisions": true}
 	var main = load("res://scripts/main.gd").new()

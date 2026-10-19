@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Синтез звуков игры: моторы разных типов, турбина, выстрелы, шины, ветер, удары.
+"""Звуки игры: моторы (из tools/gen_engines.py) + электро, турбина, выстрелы,
+шины, ветер, удары, атмосфера трасс (толпа, птицы, сверчки, город, море, ветер)
+и перекодирование музыки в сжатый ogg.
 
-Мотор моделируется как поток выхлопных импульсов (по одному на вспышку в цилиндре)
-с учётом порядка работы и неравномерности по рядам (у кросс-плейн V8 это даёт
-характерное "бурление"), затем импульсы проходят через резонансы выхлопной системы,
-перегруз (сатурацию) и смешиваются с шумом впуска.
-
-Каждый тип мотора даёт три зацикленных семпла: газ на низких оборотах, газ на высоких
+Каждый тип мотора — три зацикленных семпла: газ на низких оборотах, газ на высоких
 и сброс газа. В игре они смешиваются и транспонируются по текущим оборотам.
 
-Запуск: python3 tools/gen_audio.py  (нужны numpy и scipy)
+Моторы (кроме электро) рендерятся физической моделью в tools/gen_engines.py.
+Запуск: ENGINESOUND=... python3 tools/gen_engines.py && MUSIC_DIR=<папка с mp3> python3 tools/gen_audio.py
 Результат: audio/*.wav и scripts/data/engine_db.gd
 """
 import os
@@ -17,43 +15,23 @@ import wave
 
 import numpy as np
 from scipy import signal
+from scipy.io import wavfile
 
 SR = 32000
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "audio")
 rng = np.random.default_rng(1611)
 
-# порядок вспышек по рядам: 0 — левый ряд, 1 — правый
-CROSSPLANE = [0, 1, 1, 0, 1, 0, 0, 1]
-
+# паспорт моторов для игры (сами семплы — в tools/gen_engines.py)
 ENGINES = {
-    "i4t": dict(name="Рядная 4, турбо", cyl=4, lo=2600, hi=6800, off=4200, idle=950, redline=7300, gears=6,
-                turbo=True, pops=True, reso=[(430, 7, 1.0), (1150, 5, 0.55), (2600, 4, 0.25)],
-                lp=4800, drive=2.6, rasp=0.5, intake=0.22, body=0.45),
-    "f6": dict(name="Оппозитная 6", cyl=6, lo=3000, hi=8200, off=5000, idle=900, redline=9000, gears=7,
-               turbo=False, pops=True, reso=[(520, 6, 1.0), (1500, 5, 0.65), (3300, 4, 0.3)],
-               lp=7000, drive=2.2, rasp=0.35, intake=0.18, body=0.45),
-    "v8x": dict(name="V8 (кросс-плейн)", cyl=8, banks=CROSSPLANE, bank_amp=(1.0, 0.5), lo=2300, hi=6200, off=3800,
-                idle=800, redline=6900, gears=6, turbo=False, pops=True,
-                reso=[(95, 4, 1.0), (250, 5, 0.85), (680, 4, 0.35)], lp=2700, drive=3.4, rasp=0.5,
-                intake=0.2, body=0.35),
-    "v8f": dict(name="V8 битурбо (флэт-плейн)", cyl=8, banks=[0, 1] * 4, bank_amp=(1.0, 0.85), lo=3000, hi=8000,
-                off=5000, idle=950, redline=8600, gears=7, turbo=True, pops=True,
-                reso=[(230, 5, 1.0), (640, 5, 0.6), (1700, 4, 0.25)], lp=4800, drive=2.9, rasp=0.4,
-                intake=0.2, body=0.55),
-    "i6t": dict(name="Рядная 6, битурбо", cyl=6, lo=2600, hi=7000, off=4200, idle=850, redline=7600, gears=6,
-                turbo=True, pops=True, reso=[(280, 5, 1.0), (820, 5, 0.65), (2000, 4, 0.28)],
-                lp=4000, drive=2.6, rasp=0.4, intake=0.2, body=0.5),
-    "v10": dict(name="V10", cyl=10, lo=3200, hi=8600, off=5200, idle=1000, redline=9000, gears=7,
-                turbo=False, pops=True, reso=[(330, 5, 1.0), (1050, 6, 0.6), (2400, 4, 0.25)],
-                lp=6500, drive=2.5, rasp=0.35, intake=0.18, body=0.55),
-    "v12": dict(name="V12", cyl=12, lo=3200, hi=8800, off=5400, idle=1000, redline=9300, gears=7,
-                turbo=False, pops=False, reso=[(380, 5, 1.0), (1250, 6, 0.65), (2900, 5, 0.3)],
-                lp=7500, drive=2.2, rasp=0.3, intake=0.16, body=0.6),
-    "w16": dict(name="W16, четыре турбины", cyl=16, banks=[0, 1, 0, 1, 1, 0, 1, 0] * 2, bank_amp=(1.0, 0.8),
-                paired=True, lo=2200, hi=6400, off=3800, idle=750, redline=7000, gears=7, turbo=True, pops=False,
-                reso=[(130, 4, 1.0), (380, 5, 0.85), (950, 4, 0.4)], lp=3000, drive=3.3, rasp=0.4,
-                intake=0.22, body=0.6),
+    "i4t": dict(name="Рядная 4, турбо", idle=950, redline=7300, gears=6, turbo=True, pops=True),
+    "f6": dict(name="Оппозитная 6", idle=900, redline=9000, gears=7, turbo=False, pops=True),
+    "v8x": dict(name="V8 (кросс-плейн)", idle=800, redline=6900, gears=6, turbo=False, pops=True),
+    "v8f": dict(name="V8 битурбо (флэт-плейн)", idle=950, redline=8600, gears=7, turbo=True, pops=True),
+    "i6t": dict(name="Рядная 6, битурбо", idle=850, redline=7600, gears=6, turbo=True, pops=True),
+    "v10": dict(name="V10", idle=1000, redline=9000, gears=7, turbo=False, pops=True),
+    "v12": dict(name="V12", idle=1000, redline=9300, gears=7, turbo=False, pops=False),
+    "w16": dict(name="W16, четыре турбины", idle=750, redline=7000, gears=7, turbo=True, pops=False),
 }
 
 EV = dict(name="Электро", lo=3000, hi=10000, off=6000, idle=0, redline=14000, gears=1, turbo=False, pops=False)
@@ -110,77 +88,6 @@ def env_exp(n, tau):
 
 
 # ---------------------------------------------------------------- мотор
-
-def engine_loop(p, rpm, load, seconds=1.25):
-    cyl = p["cyl"]
-    cycle = int(round(SR * 120.0 / rpm))           # 4-тактный цикл = 2 оборота
-    real_rpm = SR * 120.0 / cycle
-    cycles = max(4, int(round(seconds * SR / cycle)))
-    n = cycle * cycles
-    banks = p.get("banks")
-    bank_amp = p.get("bank_amp", (1.0, 1.0))
-
-    pulses = np.zeros(n)
-    rasp = np.zeros(n)
-    burst_len = int(0.0022 * SR)
-    burst_env = env_exp(burst_len, 0.0006)
-    for c in range(cycles):
-        for k in range(cyl):
-            amp = 1.0
-            if banks:
-                amp = bank_amp[banks[k % len(banks)]]
-            jitter = rng.normal(0, 0.004 if load > 0.5 else 0.01)
-            if p.get("paired"):
-                # две половины мотора вспыхивают почти одновременно — тон ниже и гуще
-                frac = (k // 2) / (cyl / 2) + (k % 2) * 0.011
-            else:
-                frac = k / cyl
-            pos = (c * cycle + (frac + jitter) * cycle) % n
-            a = amp * (1.0 + rng.normal(0, 0.06 if load > 0.5 else 0.22))
-            if load < 0.5 and rng.random() < 0.12:
-                a *= 0.15                               # пропуски на сбросе газа
-            a *= load
-            i = int(pos)
-            fr = pos - i
-            pulses[i % n] += a * (1 - fr)
-            pulses[(i + 1) % n] += a * fr
-            idx = (i + np.arange(burst_len)) % n
-            rasp[idx] += a * burst_env * rng.normal(0, 1, burst_len)
-
-    def chain(x_pulses, x_rasp):
-        y = np.zeros_like(x_pulses)
-        src = x_pulses + x_rasp * p["rasp"] * 0.35
-        for f, q, g in p["reso"]:
-            y += g * reso(src, f, q)
-        # "грудь" звука: основная частота вспышек
-        fire = rpm / 120.0 * (cyl / 2 if p.get("paired") else cyl)
-        y += p["body"] * lp(x_pulses, max(160.0, fire * 1.35), 2) * 6.0
-        y = lp(y, p["lp"], 2)
-        y = y / (np.std(y) * 3.0 + 1e-9)
-        drive = p["drive"] * (1.0 if load > 0.5 else 0.7)
-        y = np.tanh(drive * y)
-        y = lp(y, p["lp"], 2)
-        return hp(y, 32, 2)
-
-    proc = periodic(lambda x: x, n)
-    y = chain(np.tile(pulses, 3), np.tile(rasp, 3))[n:2 * n]
-    # шум впуска, модулированный тактами двигателя
-    noise = rng.normal(0, 1, n)
-    envl = lp(np.tile(np.abs(pulses), 3), 60, 2)[n:2 * n]
-    envl = envl / (np.max(envl) + 1e-9)
-    intake = periodic(lambda x: bp(x, 450, 2200, 2), n)(noise) * (0.35 + 0.65 * envl)
-    intake = intake / (np.std(intake) + 1e-9) * np.std(y)
-    y = y + intake * p["intake"] * (1.0 if load > 0.5 else 0.45)
-    if load < 0.5:
-        # потрескивание на сбросе
-        for _ in range(int(cycles * 0.25)):
-            i = rng.integers(0, n)
-            L = int(0.006 * SR)
-            idx = (i + np.arange(L)) % n
-            y[idx] += rng.normal(0, 1, L) * env_exp(L, 0.0015) * np.std(y) * 2.5
-    del proc
-    return y, real_rpm
-
 
 def ev_loop(rpm, load, seconds=1.0):
     f0 = rpm / 60.0 * 2.0                            # 2 пары полюсов
@@ -282,20 +189,152 @@ def beep(f, dur):
     return (np.sin(2 * np.pi * f * t) + 0.3 * np.sin(2 * np.pi * f * 2 * t) + 0.15 * np.sin(2 * np.pi * f * 3 * t)) * e
 
 
+# ---------------------------------------------------------------- атмосфера
+
+def _place(buf, x, pos):
+    """Кладёт сигнал x в кольцевой буфер с позиции pos (для бесшовных петель)."""
+    n = len(buf)
+    idx = (pos + np.arange(len(x))) % n
+    np.add.at(buf, idx, x)
+
+
+def crowd_loop(seconds=8.0):
+    n = int(SR * seconds)
+    y = np.zeros(n)
+    # гул множества голосов: шум в полосе речи с "слоговой" модуляцией
+    for _ in range(40):
+        v = periodic(lambda x: bp(x, rng.uniform(250, 500), rng.uniform(1500, 3200), 2), n)(rng.normal(0, 1, n))
+        rate = rng.uniform(2.5, 6.0)
+        ph = rng.uniform(0, 2 * np.pi)
+        k = max(1, round(rate * seconds))
+        am = 0.5 + 0.5 * np.sin(2 * np.pi * k * np.arange(n) / n + ph)
+        y += v * am ** 2 * rng.uniform(0.3, 1.0)
+    y /= np.std(y)
+    # волны восторга
+    for c in (0.15, 0.62):
+        L = int(SR * 1.6)
+        t = np.arange(L) / SR
+        e = np.sin(np.pi * t / 1.6) ** 2
+        cheer = bp(rng.normal(0, 1, L), 700, 2800, 2)
+        _place(y, cheer / np.std(cheer) * e * 1.6, int(c * n))
+    # аплодисменты
+    for _ in range(int(seconds * 25)):
+        L = int(SR * 0.012)
+        clap = hp(rng.normal(0, 1, L), 1200, 2) * env_exp(L, 0.003)
+        _place(y, clap * rng.uniform(0.4, 1.2), rng.integers(0, n))
+    return y
+
+
+def birds_loop(seconds=10.0):
+    n = int(SR * seconds)
+    y = periodic(lambda x: lp(x, 900, 2), n)(rng.normal(0, 1, n)) * 0.25   # листва
+    for _ in range(14):
+        f0 = rng.uniform(2500, 5000)
+        reps = rng.integers(2, 5)
+        pos = rng.integers(0, n)
+        for r in range(reps):
+            L = int(SR * rng.uniform(0.05, 0.13))
+            t = np.arange(L) / SR
+            sweep = f0 * (1 + rng.uniform(-0.35, 0.35) * t / t[-1])
+            ph = 2 * np.pi * np.cumsum(sweep) / SR
+            chirp = np.sin(ph + 0.6 * np.sin(2 * np.pi * rng.uniform(30, 80) * t)) * np.sin(np.pi * t / t[-1])
+            _place(y, chirp * rng.uniform(0.3, 0.8), pos + int(r * SR * rng.uniform(0.12, 0.2)))
+    return y
+
+
+def crickets_loop(seconds=8.0):
+    n = int(SR * seconds)
+    t = np.arange(n) / SR
+    y = periodic(lambda x: lp(x, 500, 2), n)(rng.normal(0, 1, n)) * 0.3
+    for f, period, ph in ((4500, 0.5, 0.0), (5200, 0.62, 0.21), (3900, 0.44, 0.33)):
+        k = max(1, round(seconds / period))
+        per = seconds / k
+        phase = ((t + ph) % per) / per
+        gate = ((phase < 0.25) & (np.sin(2 * np.pi * 32 * t) > 0)).astype(float)
+        gate = lp(np.tile(gate, 3), 300, 1)[n:2 * n]
+        fc = round(f * seconds) / seconds
+        y += np.sin(2 * np.pi * fc * t) * gate * 0.5
+    return y
+
+
+def city_loop(seconds=8.0):
+    n = int(SR * seconds)
+    t = np.arange(n) / SR
+    drone = periodic(lambda x: lp(x, 180, 2), n)(rng.normal(0, 1, n))
+    traffic = periodic(lambda x: bp(x, 250, 1400, 2), n)(rng.normal(0, 1, n))
+    swell = 0.6 + 0.4 * np.sin(2 * np.pi * 2 * t / seconds) * np.sin(2 * np.pi * 3 * t / seconds + 1)
+    y = drone / np.std(drone) + traffic / np.std(traffic) * swell * 0.5
+    L = int(SR * 0.45)
+    tt = np.arange(L) / SR
+    horn = (np.sign(np.sin(2 * np.pi * 410 * tt)) + np.sign(np.sin(2 * np.pi * 515 * tt))) * np.minimum(1, (0.45 - tt) / 0.05) * np.minimum(1, tt / 0.02)
+    _place(y, lp(horn, 1800, 2) * 0.25, int(n * 0.55))
+    return y
+
+
+def sea_loop(seconds=10.0):
+    n = int(SR * seconds)
+    t = np.arange(n) / SR
+    noise = rng.normal(0, 1, n)
+    surf = periodic(lambda x: lp(x, 1400, 2), n)(noise)
+    hiss = periodic(lambda x: bp(x, 2000, 7000, 2), n)(noise)
+    env = (0.5 - 0.5 * np.cos(2 * np.pi * 2 * t / seconds)) ** 1.5
+    y = surf / np.std(surf) * (0.35 + env) + hiss / np.std(hiss) * env * 0.4
+    for c in (0.2, 0.7):
+        L = int(SR * 0.5)
+        tt = np.arange(L) / SR
+        f = 2300 - 1300 * tt / 0.5
+        ph = 2 * np.pi * np.cumsum(f) / SR
+        gull = (np.sin(ph) + 0.4 * np.sin(2 * ph)) * np.sin(np.pi * tt / 0.5) * (0.6 + 0.4 * np.sin(2 * np.pi * 9 * tt))
+        _place(y, gull * 0.5, int(c * n))
+    return y
+
+
+def desert_wind_loop(seconds=10.0):
+    n = int(SR * seconds)
+    t = np.arange(n) / SR
+    noise = rng.normal(0, 1, n)
+    body = periodic(lambda x: bp(x, 150, 900, 2), n)(noise)
+    whistle = periodic(lambda x: reso(x, 950, 25), n)(noise)
+    gust = 0.45 + 0.55 * (0.5 - 0.5 * np.cos(2 * np.pi * 2 * t / seconds)) * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * t / seconds))
+    return (body / np.std(body) + whistle / np.std(whistle) * 0.25) * gust
+
+
+def write_ogg(name, x, rms=0.2, q=1):
+    """Сжатый ogg (для длинных петель атмосферы)."""
+    tmp = os.path.join(OUT, "_tmp.wav")
+    write_wav("_tmp.wav", x, rms=rms)
+    os.system(f'ffmpeg -y -loglevel error -i "{tmp}" -ac 1 -c:a libvorbis -q:a {q} "{os.path.join(OUT, name)}"')
+    os.remove(tmp)
+
+
+def music(src_dir):
+    """Музыка игрока: перекодирование в ogg с сильным сжатием."""
+    mdir = os.path.join(OUT, "music")
+    os.makedirs(mdir, exist_ok=True)
+    files = sorted(f for f in os.listdir(src_dir) if f.lower().endswith((".mp3", ".ogg", ".wav", ".flac")))
+    for i, f in enumerate(files):
+        dst = os.path.join(mdir, f"track{i + 1}.ogg")
+        os.system(f'ffmpeg -y -loglevel error -i "{os.path.join(src_dir, f)}" -vn -ac 2 -ar 44100 -c:a libvorbis -b:a 48k "{dst}"')
+        print(f"  music {f} -> {os.path.basename(dst)} {os.path.getsize(dst) // 1024} КБ")
+
+
 # ---------------------------------------------------------------- main
 
 def main():
+    import gen_engines
     os.makedirs(OUT, exist_ok=True)
+    build = os.path.join(ROOT, "tools", ".build")
     db = {}
     for key, p in ENGINES.items():
         print(key, p["name"])
-        lo, lo_rpm = engine_loop(p, p["lo"], 1.0)
-        hi, hi_rpm = engine_loop(p, p["hi"], 1.0)
-        off, off_rpm = engine_loop(p, p["off"], 0.35)
-        write_wav(f"eng_{key}_lo.wav", lo, rms=0.26)
-        write_wav(f"eng_{key}_hi.wav", hi, rms=0.26)
-        write_wav(f"eng_{key}_off.wav", off, rms=0.17)
-        db[key] = dict(name=p["name"], lo_rpm=lo_rpm, hi_rpm=hi_rpm, off_rpm=off_rpm, idle=p["idle"],
+        ge = gen_engines.ENGINES[key]
+        for layer in ("lo", "hi", "off"):
+            src = os.path.join(build, f"eng_{key}_{layer}.wav")
+            if not os.path.exists(src):
+                raise SystemExit("нет %s — сначала запустите tools/gen_engines.py" % src)
+            sr, x = wavfile.read(src)
+            write_wav(f"eng_{key}_{layer}.wav", x / 32768.0, rms=0.17 if layer == "off" else 0.25)
+        db[key] = dict(name=p["name"], lo_rpm=ge["lo"], hi_rpm=ge["hi"], off_rpm=ge["off"], idle=p["idle"],
                        redline=p["redline"], gears=p["gears"], turbo=p["turbo"], pops=p["pops"])
     print("ev")
     lo, lo_rpm = ev_loop(EV["lo"], 1.0)
@@ -319,6 +358,19 @@ def main():
     write_wav("shift.wav", shift(), peak=0.7)
     write_wav("beep.wav", beep(660, 0.25), peak=0.6)
     write_wav("go.wav", beep(1320, 0.7), peak=0.6)
+
+    print("ambience")
+    write_ogg("amb_crowd.ogg", crowd_loop(), rms=0.2)
+    write_ogg("amb_birds.ogg", birds_loop(), rms=0.12)
+    write_ogg("amb_crickets.ogg", crickets_loop(), rms=0.1)
+    write_ogg("amb_city.ogg", city_loop(), rms=0.15)
+    write_ogg("amb_sea.ogg", sea_loop(), rms=0.18)
+    write_ogg("amb_wind.ogg", desert_wind_loop(), rms=0.15)
+
+    music_src = os.environ.get("MUSIC_DIR")
+    if music_src:
+        print("music")
+        music(music_src)
 
     lines = [
         "class_name EngineDB",

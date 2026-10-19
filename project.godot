@@ -16,6 +16,7 @@ config/quit_on_go_back=false
 
 Game="*res://scripts/autoload/game.gd"
 Net="*res://scripts/autoload/net.gd"
+Music="*res://scripts/autoload/music.gd"
 
 [display]
 

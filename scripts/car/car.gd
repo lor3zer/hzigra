@@ -11,6 +11,7 @@ signal shifted(up: bool)
 
 var def: Dictionary
 var paint := 0
+var tune: Dictionary = {}
 var ctrl := Ctrl.PLAYER
 var peer_id := 0
 var driver_name := ""
@@ -67,12 +68,12 @@ var net_nitro := false
 var net_throttle := 0.0
 
 
-func setup(d: Dictionary, p: int, t: Track) -> void:
+func setup(d: Dictionary, p: int, t: Track, tn: Dictionary = {}) -> void:
 	track = t
-	set_def(d, p)
+	set_def(d, p, tn)
 
 
-func set_def(d: Dictionary, p: int) -> void:
+func set_def(d: Dictionary, p: int, tn: Dictionary = {}) -> void:
 	def = d
 	paint = p
 	top_speed = d["top"] / 3.6
@@ -83,7 +84,8 @@ func set_def(d: Dictionary, p: int) -> void:
 		model.queue_free()
 	model = CarModel.new()
 	add_child(model)
-	model.build(def, paint)
+	tune = tn
+	model.build(def, paint, tune)
 	if sound:
 		sound.refresh()
 

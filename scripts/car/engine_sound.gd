@@ -30,7 +30,13 @@ var _gain := 0.0   # дБ: машина игрока громче
 static func stream(name: String, loop: bool) -> AudioStream:
 	if _streams.has(name):
 		return _streams[name]
-	var s: AudioStreamWAV = load("res://audio/%s.wav" % name)
+	var path := "res://audio/%s.wav" % name
+	if not ResourceLoader.exists(path):
+		var ogg: AudioStreamOggVorbis = load("res://audio/%s.ogg" % name)
+		ogg.loop = loop
+		_streams[name] = ogg
+		return ogg
+	var s: AudioStreamWAV = load(path)
 	if loop and s.loop_mode == AudioStreamWAV.LOOP_DISABLED:
 		# запасной вариант, если в .import не включено зацикливание
 		s = s.duplicate()
@@ -80,6 +86,7 @@ func _player(s: AudioStream) -> Node:
 		p3.max_db = 3.0
 		p = p3
 	p.stream = s
+	p.bus = "SFX"
 	add_child(p)
 	return p
 

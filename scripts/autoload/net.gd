@@ -136,7 +136,8 @@ func _register(info: Dictionary) -> void:
 		_rejected.rpc_id(id, "Гонка уже идёт, попробуйте позже")
 		get_tree().create_timer(0.5).timeout.connect(func(): if multiplayer.multiplayer_peer: multiplayer.multiplayer_peer.disconnect_peer(id))
 		return
-	players[id] = {"name": str(info.get("name", "Игрок")).left(20), "car": str(info.get("car", "kestrel_rs")), "paint": int(info.get("paint", 0))}
+	players[id] = {"name": str(info.get("name", "Игрок")).left(20), "car": str(info.get("car", "kestrel_rs")),
+		"paint": int(info.get("paint", 0)), "tune": Game.sanitize_tune(info.get("tune", {}))}
 	_sync_all()
 
 

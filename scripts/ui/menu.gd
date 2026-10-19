@@ -16,6 +16,8 @@ var _lobby_players: VBoxContainer
 var _lobby_cfg: VBoxContainer
 var _garage_sel := ""
 var _garage_paint := 0
+var _garage_tune: Dictionary = {}
+var _garage_tab := "stats"
 var _garage_info: VBoxContainer
 var _garage_return := "main"
 var _toast_time := 0.0
@@ -382,6 +384,7 @@ func _garage() -> void:
 	_set_title("Гараж", "  %d машин: спорт и гипер" % CarDB.CARS.size())
 	_garage_sel = Game.settings["car"]
 	_garage_paint = int(Game.settings["paint"])
+	_garage_tune = Game.get_tune(_garage_sel)
 	var hb := HBoxContainer.new()
 	hb.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_holder.add_child(hb)
@@ -400,6 +403,7 @@ func _garage() -> void:
 			var pick := func():
 				_garage_sel = id
 				_garage_paint = int(CarDB.get_car(id)["paint"])
+				_garage_tune = Game.get_tune(id)
 				_update_garage()
 			var b := UITheme.button(c["name"], pick, Vector2(330, 54))
 			list.add_child(b)
@@ -417,6 +421,7 @@ func _garage() -> void:
 	var choose := func():
 		Game.settings["car"] = _garage_sel
 		Game.settings["paint"] = _garage_paint
+		Game.set_tune(_garage_sel, _garage_tune)
 		Game.save_settings()
 		Net.update_my_info()
 		open(_garage_return)
@@ -426,13 +431,28 @@ func _garage() -> void:
 func _update_garage() -> void:
 	var c := CarDB.get_car(_garage_sel)
 	if _preview_model:
-		_preview_model.build(c, _garage_paint)
+		_preview_model.build(c, _garage_paint, _garage_tune)
 	for ch in _garage_info.get_children():
 		ch.queue_free()
 	var top := HBoxContainer.new()
 	_garage_info.add_child(top)
 	top.add_child(UITheme.label(c["name"], 34, Color.WHITE))
 	top.add_child(UITheme.label("  " + CarDB.CLASS_NAMES[c["class"]], 26, UITheme.ACCENT if c["class"] == "sport" else UITheme.ACCENT2))
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(spacer)
+	for tab in [["stats", "Характеристики"], ["tune", "Тюнинг"]]:
+		var key: String = tab[0]
+		var tb := UITheme.button(tab[1], func():
+			_garage_tab = key
+			_update_garage(), Vector2(200, 50))
+		tb.add_theme_font_size_override("font_size", 22)
+		if _garage_tab == key:
+			tb.add_theme_stylebox_override("normal", UITheme.box(Color(0.0, 0.45, 0.7), UITheme.ACCENT))
+		top.add_child(tb)
+	if _garage_tab == "tune":
+		_tuning_panel()
+		return
 	var grid := GridContainer.new()
 	grid.columns = 4
 	_garage_info.add_child(grid)
@@ -476,6 +496,38 @@ func _update_garage() -> void:
 		paints.add_child(b)
 
 
+## Компактная сетка тюнинга (одинаковый набор для всех машин).
+func _tuning_panel() -> void:
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 24)
+	_garage_info.add_child(grid)
+	for slot in CarModel.TUNING:
+		var key: String = slot[0]
+		var options: Array = slot[2]
+		var idx := int(_garage_tune.get(key, 0))
+		var row := HBoxContainer.new()
+		var l := UITheme.label(slot[1], 19, Color(0.75, 0.8, 0.9))
+		l.custom_minimum_size.x = 150
+		row.add_child(l)
+		var val := UITheme.label(options[idx], 19, Color(1, 0.9, 0.5))
+		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		val.custom_minimum_size.x = 150
+		var step := func(d: int):
+			_garage_tune[key] = posmod(int(_garage_tune.get(key, 0)) + d, options.size())
+			_update_garage()
+		var prev := UITheme.button("<", step.bind(-1), Vector2(46, 44))
+		var next := UITheme.button(">", step.bind(1), Vector2(46, 44))
+		row.add_child(prev)
+		row.add_child(val)
+		row.add_child(next)
+		grid.add_child(row)
+	var reset := func():
+		_garage_tune = {}
+		_update_garage()
+	_garage_info.add_child(UITheme.button("Сбросить тюнинг", reset, Vector2(260, 48)))
+
+
 func _settings() -> void:
 	_set_title("Настройки")
 	var s: Dictionary = Game.settings
@@ -511,9 +563,22 @@ func _settings() -> void:
 	for k in vols.size():
 		if absf(float(vols[k]) - float(s["volume"])) < 0.05:
 			vi = k
-	_selector(vb, "Громкость", vol_names, vi, func(i):
+	_selector(vb, "Громкость звуков", vol_names, vi, func(i):
 		s["volume"] = vols[i]
 		Game.apply_audio())
+	var mvols := [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+	var mnames := mvols.map(func(v): return "Выкл" if v == 0.0 else "%d%%" % int(v * 100))
+	var mi := 0
+	for k in mvols.size():
+		if absf(float(mvols[k]) - float(s["music"])) < 0.05:
+			mi = k
+	_selector(vb, "Музыка", mnames, mi, func(i):
+		s["music"] = mvols[i]
+		Game.apply_audio())
+	var skip := func():
+		Music.next()
+		toast("Сейчас играет: " + Music.title())
+	vb.add_child(UITheme.button("Следующий трек", skip, Vector2(0, 56)))
 	_selector(vb, "Показывать FPS", ["Нет", "Да"], 1 if s["show_fps"] else 0, func(i): s["show_fps"] = i == 1)
 	var bar := _bottom_bar()
 	var back := func():

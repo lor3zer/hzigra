@@ -23,6 +23,10 @@ var cones := PackedVector3Array()     # статичные препятстви�
 var bbox := Rect2()
 var night := false
 var sun: DirectionalLight3D
+var girl: StartGirl
+var stands: Stands
+var crowd_spots: Array[Vector3] = []
+static var _tex_cache := {}
 
 var _rng := RandomNumberGenerator.new()
 
@@ -212,6 +216,26 @@ static func quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3
 		st.add_vertex(vs[i])
 
 
+static func tex(name: String) -> Texture2D:
+	if not _tex_cache.has(name):
+		_tex_cache[name] = load("res://textures/" + name)
+	return _tex_cache[name]
+
+
+## Материал с текстурой. triplanar — для коробок без развёртки (масштаб в метрах^-1).
+static func _tex_mat(name: String, color: Color, uv_scale := Vector3.ONE, triplanar := false, vc := false) -> StandardMaterial3D:
+	var m := _mat(color, 0.9)
+	m.albedo_texture = tex(name)
+	m.uv1_scale = uv_scale
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	m.vertex_color_use_as_albedo = vc
+	m.metallic_specular = 0.2
+	if triplanar:
+		m.uv1_triplanar = true
+		m.uv1_world_triplanar = true
+	return m
+
+
 static func _mat(color: Color, rough := 0.9, metal := 0.0) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = color
@@ -236,22 +260,6 @@ static func _emissive(color: Color, energy := 2.0) -> StandardMaterial3D:
 	return m
 
 
-static func _noise_tex(lo: float, hi: float, freq := 0.06) -> NoiseTexture2D:
-	var noise := FastNoiseLite.new()
-	noise.frequency = freq
-	noise.fractal_octaves = 3
-	var tex := NoiseTexture2D.new()
-	tex.width = 256
-	tex.height = 256
-	tex.seamless = true
-	tex.noise = noise
-	var g := Gradient.new()
-	g.set_color(0, Color(lo, lo, lo))
-	g.set_color(1, Color(hi, hi, hi))
-	tex.color_ramp = g
-	return tex
-
-
 func _add_mesh(mesh: Mesh, mat: Material, shadow := false) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -269,13 +277,13 @@ func _build_environment(tod: int, shadows: bool) -> void:
 	var sun_col: Color
 	var sun_energy: float
 	var sun_elev: float
-	var amb := 0.6
+	var amb := 0.42
 	match tod:
 		0:
 			sky_top = Color(0.22, 0.45, 0.85)
 			sky_hor = Color(0.72, 0.82, 0.95)
 			sun_col = Color(1.0, 0.97, 0.9)
-			sun_energy = 1.25
+			sun_energy = 1.45
 			sun_elev = -52.0
 		1:
 			sky_top = Color(0.22, 0.2, 0.45)
@@ -304,6 +312,8 @@ func _build_environment(tod: int, shadows: bool) -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = amb
+	env.ambient_light_sky_contribution = 0.65
+	env.ambient_light_color = Color(0.62, 0.6, 0.55)
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.fog_enabled = true
 	env.fog_light_color = sky_hor
@@ -328,9 +338,7 @@ func _build_ground() -> void:
 	var center := bbox.get_center()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(9000, 9000)
-	var mat := _mat(theme["ground"], 1.0)
-	mat.albedo_texture = _noise_tex(0.78, 1.0, 0.04)
-	mat.uv1_scale = Vector3(320, 320, 1)
+	var mat := _tex_mat(theme.get("ground_tex", "grass.jpg"), theme.get("ground_tint", Color(0.9, 0.9, 0.9)), Vector3(900, 900, 1))
 	var mi := _add_mesh(plane, mat)
 	mi.position = Vector3(center.x, -0.02, center.y)
 
@@ -342,7 +350,7 @@ func _build_ground() -> void:
 		w.position = Vector3(center.x, 0.0, bbox.end.y + 160.0 + 1500.0)
 		var beach := PlaneMesh.new()
 		beach.size = Vector2(9000, 60)
-		var b := _add_mesh(beach, _mat(Color(0.9, 0.84, 0.62), 1.0))
+		var b := _add_mesh(beach, _tex_mat("sand.jpg", Color(1, 1, 1), Vector3(400, 3, 1)))
 		b.position = Vector3(center.x, -0.01, bbox.end.y + 140.0)
 
 	# далёкие горы / холмы по горизонту
@@ -365,7 +373,8 @@ func _build_ground() -> void:
 		mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(r, h, r)), pos))
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
-	mmi.material_override = _mat(theme["mountain"], 1.0)
+	var mtn := _tex_mat("rock.jpg", theme["mountain"], Vector3(6, 3, 1))
+	mmi.material_override = mtn
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mmi)
 
@@ -396,10 +405,10 @@ func _ribbon(off_a: float, off_b: float, y: float, color_fn: Callable, uv_len :=
 
 func _build_road() -> void:
 	var hw := half_width
-	var asphalt := _vc_mat(0.85)
-	asphalt.albedo_texture = _noise_tex(0.86, 1.0, 0.12)
-	var road_col := Color(0.3, 0.3, 0.31)
-	_add_mesh(_ribbon(-hw, hw, 0.0, func(_i): return road_col, 14.0), asphalt)
+	var asphalt := _tex_mat("asphalt.jpg", Color.WHITE, Vector3.ONE, false, true)
+	asphalt.roughness = 0.85
+	var road_col := Color(0.44, 0.44, 0.46)
+	_add_mesh(_ribbon(-hw, hw, 0.0, func(_i): return road_col, 12.0), asphalt)
 
 	var white := Color(0.95, 0.95, 0.95)
 	var lines := _vc_mat()
@@ -415,9 +424,10 @@ func _build_road() -> void:
 	_add_mesh(_ribbon(hw, hw + 1.4, 0.03, curb), lines)
 	_add_mesh(_ribbon(-hw - 1.4, -hw, 0.03, curb), lines)
 
-	var run_col: Color = theme["runoff"]
-	_add_mesh(_ribbon(hw, wall_dist, 0.005, func(_i): return run_col), lines)
-	_add_mesh(_ribbon(-wall_dist, -hw, 0.005, func(_i): return run_col), lines)
+	var run_col: Color = theme.get("runoff_tint", Color(1, 1, 1))
+	var run_mat := _tex_mat(theme.get("runoff_tex", "gravel.jpg"), Color.WHITE, Vector3(1, 1, 1), false, true)
+	_add_mesh(_ribbon(hw, wall_dist, 0.005, func(_i): return run_col, 8.0), run_mat)
+	_add_mesh(_ribbon(-wall_dist, -hw, 0.005, func(_i): return run_col, 8.0), run_mat)
 
 
 func _build_walls() -> void:
@@ -435,14 +445,18 @@ func _build_walls() -> void:
 			var col := ca if int(cum[i] / 6.0) % 2 == 0 else cb
 			st.set_color(col)
 			st.set_normal(-normals[i] * side)
-			quad(st, a, b, b + Vector3(0, h, 0), a + Vector3(0, h, 0), -normals[i] * side)
+			var u0 := cum[i] / 4.0
+			var u1 := u0 + pts[i].distance_to(pts[j]) / 4.0
+			quad(st, a, b, b + Vector3(0, h, 0), a + Vector3(0, h, 0), -normals[i] * side,
+				PackedVector2Array([Vector2(u0, 1), Vector2(u1, 1), Vector2(u1, 0.7), Vector2(u0, 0.7)]))
 			# верхняя грань
 			var a2 := pts[i] + normals[i] * side * (wall_dist + 0.5)
 			var b2 := pts[j] + normals[j] * side * (wall_dist + 0.5)
 			st.set_color(Color(0.6, 0.6, 0.62))
 			st.set_normal(Vector3.UP)
-			quad(st, a + Vector3(0, h, 0), b + Vector3(0, h, 0), b2 + Vector3(0, h, 0), a2 + Vector3(0, h, 0), Vector3.UP)
-	_add_mesh(st.commit(), _vc_mat(0.7))
+			quad(st, a + Vector3(0, h, 0), b + Vector3(0, h, 0), b2 + Vector3(0, h, 0), a2 + Vector3(0, h, 0), Vector3.UP,
+				PackedVector2Array([Vector2(u0, 0), Vector2(u1, 0), Vector2(u1, 0.1), Vector2(u0, 0.1)]))
+	_add_mesh(st.commit(), _tex_mat("concrete.jpg", Color.WHITE, Vector3.ONE, false, true))
 
 
 func _build_start() -> void:
@@ -492,48 +506,25 @@ func _build_start() -> void:
 		lbl.rotation.y = 0.0 if s > 0 else PI
 		arch.add_child(lbl)
 
+	# девушка с флагами слева от линии старта, лицом к решётке
+	girl = StartGirl.new()
+	add_child(girl)
+	girl.build(theme.get("wall_b", Color(0.8, 0.1, 0.1)))
+	var gp := pts[0] - normals[0] * (half_width + 2.2) + tangents[0] * 3.0
+	girl.position = gp
+	girl.rotation.y = yaw_from_dir(-tangents[0])
+
 	if is_open:
 		return
-	# трибуна справа от стартовой прямой
+	# главная трибуна справа от стартовой прямой
+	stands = Stands.new(self)
 	var k := index_at_distance(70.0)
-	var off := wall_dist + 14.0
+	var off := wall_dist + 5.0
 	var stand_pos := pts[k] + normals[k] * off
-	if _clear_of_track(stand_pos, wall_dist + 12.0):
-		var stand := Node3D.new()
-		stand.transform = Transform3D(Basis(Vector3.UP, yaw_from_dir(tangents[k])), stand_pos)
-		add_child(stand)
-		var seats := _mat(Color(0.25, 0.3, 0.45))
-		var crowd := _vc_mat()
-		for row in 6:
-			var step := MeshInstance3D.new()
-			var sm := BoxMesh.new()
-			sm.size = Vector3(4.0, 1.0 + row * 1.2, 80.0)
-			step.mesh = sm
-			step.material_override = seats
-			step.position = Vector3(-6.0 + row * 2.4, (1.0 + row * 1.2) * 0.5, 0)
-			stand.add_child(step)
-		var roof := MeshInstance3D.new()
-		var rm := BoxMesh.new()
-		rm.size = Vector3(18.0, 0.4, 82.0)
-		roof.mesh = rm
-		roof.material_override = _mat(Color(0.9, 0.9, 0.92))
-		roof.position = Vector3(1.0, 11.0, 0)
-		stand.add_child(roof)
-		# болельщики — цветные точки
-		var st := SurfaceTool.new()
-		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		for row in 6:
-			for z in 50:
-				var c := Color.from_hsv(_rng.randf(), 0.7, 0.9)
-				st.set_color(c)
-				st.set_normal(Vector3.LEFT)
-				var base := Vector3(-8.05 + row * 2.4, 1.0 + row * 1.2 + 0.1, -39.0 + z * 1.56 + _rng.randf_range(-0.2, 0.2))
-				var hh := 0.7
-				quad(st, base, base + Vector3(0, 0, 0.6), base + Vector3(0, hh, 0.6), base + Vector3(0, hh, 0), Vector3.LEFT)
-		var crowd_mi := MeshInstance3D.new()
-		crowd_mi.mesh = st.commit()
-		crowd_mi.material_override = crowd
-		stand.add_child(crowd_mi)
+	if _clear_of_track(stand_pos, wall_dist + 4.0):
+		var x := normals[k]
+		var z := x.cross(Vector3.UP).normalized()
+		stands.build_stand(self, Transform3D(Basis(x, Vector3.UP, z), stand_pos), 70.0, 6, true)
 
 
 func _clear_of_track(p: Vector3, min_dist: float) -> bool:
@@ -552,9 +543,7 @@ func _build_open_area() -> void:
 	var s := half_size
 	var pad := PlaneMesh.new()
 	pad.size = Vector2(s * 2.0, s * 2.0)
-	var am := _mat(Color(0.3, 0.3, 0.32), 0.85)
-	am.albedo_texture = _noise_tex(0.86, 1.0, 0.09)
-	am.uv1_scale = Vector3(60, 60, 1)
+	var am := _tex_mat("asphalt.jpg", Color(0.48, 0.48, 0.5), Vector3(70, 70, 1))
 	_add_mesh(pad, am).position = Vector3(0, 0.0, 0)
 
 	# разметка маршрута для ИИ: пунктир
@@ -628,37 +617,15 @@ func _ring(c: Vector3, r: float, w: float, col: Color) -> void:
 # ---------------------------------------------------------------- декорации
 
 func _build_scenery() -> void:
-	var kind: String = theme["scenery"]
-	var center := bbox.get_center()
-	var ext := maxf(bbox.size.x, bbox.size.y) * 0.5 + 320.0
-	var count := 420 if kind != "buildings" else 260
-	var positions: Array[Vector3] = []
-	var min_d := wall_dist + 7.0 if kind != "buildings" else wall_dist + 22.0
-	var tries := 0
-	while positions.size() < count and tries < count * 8:
-		tries += 1
-		var p := Vector3(center.x + _rng.randf_range(-ext, ext), 0, center.y + _rng.randf_range(-ext, ext))
-		if theme.get("water", false) and p.z > bbox.end.y + 110.0:
-			continue
-		if is_open:
-			if absf(p.x) < half_size + 12.0 and absf(p.z) < half_size + 12.0:
-				continue
-		elif not _clear_of_track(p, min_d):
-			continue
-		positions.append(p)
-
-	match kind:
-		"buildings":
-			_scatter_buildings(positions)
-		"cactus":
-			_scatter(positions, _cyl(0.5, 0.5, 1.0), Color(0.25, 0.5, 0.2), _cyl(0.0, 1.2, 1.0, 5), Color(0.6, 0.5, 0.35), Vector2(4, 9), true)
-		"palms":
-			_scatter(positions, _cyl(0.25, 0.4, 1.0), Color(0.5, 0.36, 0.22), _sphere(), Color(0.15, 0.55, 0.2), Vector2(8, 14), false)
-		"snow_pines":
-			_scatter(positions, _cyl(0.3, 0.4, 1.0), Color(0.35, 0.25, 0.18), _cyl(0.0, 1.0, 1.0), Color(0.16, 0.32, 0.26), Vector2(8, 16), false)
-		_:
-			_scatter(positions, _cyl(0.3, 0.4, 1.0), Color(0.4, 0.28, 0.18), _cyl(0.0, 1.0, 1.0), Color(0.12, 0.38, 0.16), Vector2(8, 18), false)
-
+	var scenery := Scenery.new(self)
+	if stands == null:
+		stands = Stands.new(self)
+	if not is_open:
+		stands.build_corner_stands(self, scenery, 5)
+	stands.flush(self)
+	scenery._occupied.append_array(stands.occupied)
+	crowd_spots = stands.emitters
+	scenery.build(self)
 	if night and not is_open:
 		_build_lamps()
 
@@ -671,92 +638,6 @@ static func _cyl(top: float, bottom: float, h: float, segs := 8) -> CylinderMesh
 	c.radial_segments = segs
 	c.rings = 1
 	return c
-
-
-static func _sphere() -> SphereMesh:
-	var s := SphereMesh.new()
-	s.radius = 1.0
-	s.height = 1.0
-	s.radial_segments = 8
-	s.rings = 4
-	return s
-
-
-func _scatter(positions: Array[Vector3], trunk: Mesh, trunk_col: Color, crown: Mesh, crown_col: Color, height: Vector2, cactus: bool) -> void:
-	var mt := MultiMesh.new()
-	mt.transform_format = MultiMesh.TRANSFORM_3D
-	mt.mesh = trunk
-	mt.instance_count = positions.size()
-	var mc := MultiMesh.new()
-	mc.transform_format = MultiMesh.TRANSFORM_3D
-	mc.use_colors = true
-	mc.mesh = crown
-	mc.instance_count = positions.size()
-	for i in positions.size():
-		var p := positions[i]
-		var h := _rng.randf_range(height.x, height.y)
-		var rot := Basis(Vector3.UP, _rng.randf() * TAU)
-		if cactus:
-			mt.set_instance_transform(i, Transform3D(rot.scaled(Vector3(1, h, 1)), p + Vector3(0, h * 0.5, 0)))
-			mc.set_instance_transform(i, Transform3D(rot.scaled(Vector3(1.5, 0.6, 1.5)), p + Vector3(0, 0.3, 0)))
-			mc.set_instance_color(i, crown_col)
-		else:
-			var trunk_h := h * 0.35
-			mt.set_instance_transform(i, Transform3D(rot.scaled(Vector3(1, trunk_h, 1)), p + Vector3(0, trunk_h * 0.5, 0)))
-			var cw := h * 0.32
-			var ch := h * 0.75
-			if crown is SphereMesh:
-				trunk_h = h * 0.9
-				mt.set_instance_transform(i, Transform3D(rot.scaled(Vector3(1, trunk_h, 1)), p + Vector3(0, trunk_h * 0.5, 0)))
-				mc.set_instance_transform(i, Transform3D(rot.scaled(Vector3(3.2, 1.0, 3.2)), p + Vector3(0, trunk_h, 0)))
-			else:
-				mc.set_instance_transform(i, Transform3D(rot.scaled(Vector3(cw, ch, cw)), p + Vector3(0, trunk_h + ch * 0.5 - 0.5, 0)))
-			mc.set_instance_color(i, crown_col.darkened(_rng.randf_range(0.0, 0.25)))
-	var a := MultiMeshInstance3D.new()
-	a.multimesh = mt
-	a.material_override = _mat(trunk_col)
-	add_child(a)
-	var b := MultiMeshInstance3D.new()
-	b.multimesh = mc
-	var cm := _mat(Color.WHITE)
-	cm.vertex_color_use_as_albedo = true
-	b.material_override = cm
-	add_child(b)
-
-
-func _scatter_buildings(positions: Array[Vector3]) -> void:
-	var box := BoxMesh.new()
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = box
-	mm.instance_count = positions.size()
-	var win := MultiMesh.new()
-	win.transform_format = MultiMesh.TRANSFORM_3D
-	win.use_colors = true
-	win.mesh = box
-	win.instance_count = positions.size()
-	for i in positions.size():
-		var p := positions[i]
-		var w := _rng.randf_range(16, 34)
-		var d := _rng.randf_range(16, 34)
-		var h := _rng.randf_range(20, 120)
-		var rot := Basis(Vector3.UP, _rng.randf_range(-0.3, 0.3))
-		mm.set_instance_transform(i, Transform3D(rot.scaled(Vector3(w, h, d)), p + Vector3(0, h * 0.5, 0)))
-		mm.set_instance_color(i, Color.from_hsv(_rng.randf_range(0.55, 0.7), 0.15, _rng.randf_range(0.18, 0.4)))
-		# светящиеся "окна" — чуть более узкий внутренний столб
-		win.set_instance_transform(i, Transform3D(rot.scaled(Vector3(w + 0.2, h * 0.7, d * 0.4)), p + Vector3(0, h * 0.45, 0)))
-		win.set_instance_color(i, Color.from_hsv(_rng.randf_range(0.1, 0.16), 0.5, 1.0) if _rng.randf() < 0.7 else Color(0.4, 0.8, 1.0))
-	var a := MultiMeshInstance3D.new()
-	a.multimesh = mm
-	a.material_override = _vc_mat(0.6)
-	add_child(a)
-	var b := MultiMeshInstance3D.new()
-	b.multimesh = win
-	var em := _emissive(Color.WHITE, 1.0)
-	em.vertex_color_use_as_albedo = true
-	b.material_override = em
-	add_child(b)
 
 
 func _build_lamps() -> void:

@@ -34,6 +34,24 @@ func _ready() -> void:
 		var race = main.current
 		race.player.ctrl = Car.Ctrl.AI
 		race.drivers[1] = AIDriver.new(race.player, race.track, 0.9, race.cars)
+		if id == "valley":
+			await _wait(80)
+			var cam := Camera3D.new()
+			race.add_child(cam)
+			var g: Node3D = race.track.girl
+			cam.global_position = g.global_position + g.global_basis * Vector3(-1.6, 1.3, -3.4)
+			cam.look_at(g.global_position + Vector3(0, 1.1, 0))
+			cam.current = true
+			await _wait(20)
+			await _shot("girl")
+			if race.track.crowd_spots.size() > 1:
+				var sp: Vector3 = race.track.crowd_spots[1]
+				cam.global_position = sp + Vector3(25, 10, 25)
+				cam.look_at(sp)
+				await _wait(5)
+				await _shot("stand")
+			race.camera.current = true
+			cam.queue_free()
 		await _wait(60 * 5)
 		await _shot("race_" + id)
 	get_tree().quit()

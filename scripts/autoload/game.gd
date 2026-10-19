@@ -18,6 +18,8 @@ var settings := {
 	"sound": true,
 	"volume": 0.8,
 	"show_fps": false,
+	"music": 0.6,
+	"tuning": {},        # id машины -> {слот: вариант}
 }
 var records := {}        # "трасса|rev" -> {"time", "car", "name"}
 var last_race := {"track": "valley", "laps": 3, "opponents": 5, "difficulty": 1, "reverse": false, "tod": 0, "collisions": true}
@@ -39,6 +41,12 @@ func _ready() -> void:
 
 func _setup_audio() -> void:
 	# лимитер на общей шине: громко, но без цифрового перегруза
+	for bus in ["SFX", "Music"]:
+		if AudioServer.get_bus_index(bus) == -1:
+			AudioServer.add_bus()
+			var i := AudioServer.bus_count - 1
+			AudioServer.set_bus_name(i, bus)
+			AudioServer.set_bus_send(i, "Master")
 	var lim := AudioEffectHardLimiter.new()
 	lim.pre_gain_db = 2.0
 	lim.ceiling_db = -0.5
@@ -48,8 +56,13 @@ func _setup_audio() -> void:
 
 
 func apply_audio() -> void:
-	AudioServer.set_bus_mute(0, not bool(settings["sound"]))
-	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(float(settings["volume"]), 0.001)))
+	var sfx := AudioServer.get_bus_index("SFX")
+	AudioServer.set_bus_mute(sfx, not bool(settings["sound"]))
+	AudioServer.set_bus_volume_db(sfx, linear_to_db(maxf(float(settings["volume"]), 0.001)))
+	var mus := AudioServer.get_bus_index("Music")
+	var mv := float(settings["music"])
+	AudioServer.set_bus_mute(mus, mv < 0.01)
+	AudioServer.set_bus_volume_db(mus, linear_to_db(maxf(mv, 0.001)))
 
 
 func _setup_input() -> void:
@@ -147,7 +160,34 @@ static func fmt_time(t: float) -> String:
 
 
 func my_player_info() -> Dictionary:
-	return {"name": settings["player_name"], "car": settings["car"], "paint": settings["paint"]}
+	return {"name": settings["player_name"], "car": settings["car"], "paint": settings["paint"], "tune": get_tune(settings["car"])}
+
+
+func get_tune(car_id: String) -> Dictionary:
+	var all: Dictionary = settings["tuning"]
+	return all.get(car_id, {}).duplicate()
+
+
+func set_tune(car_id: String, tune: Dictionary) -> void:
+	var all: Dictionary = settings["tuning"]
+	all[car_id] = tune.duplicate()
+
+
+static func sanitize_tune(t) -> Dictionary:
+	var out := {}
+	if t is Dictionary:
+		for slot in CarModel.TUNING:
+			var key: String = slot[0]
+			var v := int(t.get(key, 0))
+			out[key] = clampi(v, 0, slot[2].size() - 1)
+	return out
+
+
+func random_tune(rng: RandomNumberGenerator) -> Dictionary:
+	var out := {}
+	for slot in CarModel.TUNING:
+		out[slot[0]] = rng.randi() % slot[2].size() if rng.randf() < 0.5 else 0
+	return out
 
 
 # ---------------------------------------------------------------- запуск
@@ -165,7 +205,8 @@ func _ai_entries(count: int, cls: String, start_id: int) -> Array:
 	var out := []
 	for i in count:
 		var c: Dictionary = pool[rng.randi() % pool.size()]
-		out.append({"id": start_id - i, "name": names[i % names.size()], "car": c["id"], "paint": rng.randi() % CarDB.PAINTS.size(), "ai": true})
+		out.append({"id": start_id - i, "name": names[i % names.size()], "car": c["id"], "paint": rng.randi() % CarDB.PAINTS.size(),
+			"ai": true, "tune": random_tune(rng)})
 	return out
 
 

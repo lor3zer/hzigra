@@ -46,7 +46,7 @@ func setup(c: Dictionary, g: Array) -> void:
 		var e: Dictionary = grid[slot]
 		var car := Car.new()
 		add_child(car)
-		car.setup(CarDB.get_car(e["car"]), int(e["paint"]), track)
+		car.setup(CarDB.get_car(e["car"]), int(e["paint"]), track, Game.sanitize_tune(e.get("tune", {})))
 		car.peer_id = int(e["id"])
 		car.driver_name = str(e["name"])
 		var gs := track.grid_slot(slot)
@@ -82,7 +82,12 @@ func setup(c: Dictionary, g: Array) -> void:
 		car.sound = snd
 		snd.setup(car, car == player)
 	ui_sound = AudioStreamPlayer.new()
+	ui_sound.bus = "SFX"
 	add_child(ui_sound)
+	_setup_ambience()
+	Music.set_race(true)
+	if mode != "sandbox" and track.girl:
+		track.girl.ready_pose()
 
 	hud = HUD.new()
 	add_child(hud)
@@ -146,6 +151,8 @@ func _process(delta: float) -> void:
 			race_time = 0.0
 			hud.flash("СТАРТ!", Color(0.3, 1.0, 0.4), true)
 			_ui("go")
+			if track.girl:
+				track.girl.go()
 	var frozen := state == "countdown"
 	if not frozen:
 		race_time += dt
@@ -174,6 +181,41 @@ func _process(delta: float) -> void:
 
 	_net_send(dt)
 	_update_camera(dt)
+
+
+## Атмосфера: фон по теме трассы и времени суток + шум толпы у трибун.
+func _setup_ambience() -> void:
+	var kind: String = track.theme["scenery"]
+	var key := "amb_birds"
+	match kind:
+		"cactus", "snow_pines":
+			key = "amb_wind"
+		"buildings":
+			key = "amb_city"
+		"palms":
+			key = "amb_sea"
+	if track.night and kind != "buildings":
+		key = "amb_crickets"
+	var amb := AudioStreamPlayer.new()
+	amb.stream = EngineSound.stream(key, true)
+	amb.bus = "SFX"
+	amb.volume_db = -9.0
+	add_child(amb)
+	amb.play()
+	for sp in track.crowd_spots:
+		var c := AudioStreamPlayer3D.new()
+		c.stream = EngineSound.stream("amb_crowd", true)
+		c.bus = "SFX"
+		c.unit_size = 14.0
+		c.max_distance = 230.0
+		c.volume_db = 3.0
+		c.position = sp
+		add_child(c)
+		c.play(randf() * 6.0)
+
+
+func _exit_tree() -> void:
+	Music.set_race(false)
 
 
 func _ui(name: String) -> void:
@@ -365,7 +407,7 @@ func change_player_car(id: String) -> void:
 	if player == null:
 		return
 	var paint := int(Game.settings["paint"])
-	player.set_def(CarDB.get_car(id), paint)
+	player.set_def(CarDB.get_car(id), paint, Game.get_tune(id))
 	Game.settings["car"] = id
 	Game.save_settings()
 	_attach_headlight()
