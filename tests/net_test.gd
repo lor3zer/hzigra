@@ -11,7 +11,6 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	if args.size() > 0:
 		role = args[0]
-	Game.settings["sound"] = false
 	var main = load("res://scripts/main.gd").new()
 	add_child(main)
 	await _wait(5)

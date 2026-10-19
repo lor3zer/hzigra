@@ -11,7 +11,6 @@ func _ready() -> void:
 	if args.size() > 0:
 		out = args[0]
 	DirAccess.make_dir_recursive_absolute(out)
-	Game.settings["sound"] = false
 	var main = load("res://scripts/main.gd").new()
 	add_child(main)
 	await _wait(10)

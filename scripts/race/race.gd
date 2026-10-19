@@ -12,7 +12,7 @@ var player: Car
 var drivers := {}          # id машины -> AIDriver
 var camera: Camera3D
 var hud: HUD
-var engine: EngineAudio
+var ui_sound: AudioStreamPlayer
 var headlight: SpotLight3D
 
 var mode := "race"
@@ -76,9 +76,13 @@ func setup(c: Dictionary, g: Array) -> void:
 		_cam_yaw = player.yaw
 		_attach_headlight()
 
-	if bool(Game.settings["sound"]):
-		engine = EngineAudio.new()
-		add_child(engine)
+	for car in cars:
+		var snd := EngineSound.new()
+		car.add_child(snd)
+		car.sound = snd
+		snd.setup(car, car == player)
+	ui_sound = AudioStreamPlayer.new()
+	add_child(ui_sound)
 
 	hud = HUD.new()
 	add_child(hud)
@@ -136,10 +140,12 @@ func _process(delta: float) -> void:
 		if n != _last_count and n <= 3 and n > 0:
 			_last_count = n
 			hud.set_countdown(n)
+			_ui("beep")
 		if countdown <= 0.0:
 			state = "racing"
 			race_time = 0.0
 			hud.flash("СТАРТ!", Color(0.3, 1.0, 0.4), true)
+			_ui("go")
 	var frozen := state == "countdown"
 	if not frozen:
 		race_time += dt
@@ -149,6 +155,12 @@ func _process(delta: float) -> void:
 	if not frozen:
 		for id in drivers:
 			drivers[id].update(dt)
+	else:
+		# боты газуют на старте
+		var tt := countdown * 3.0
+		for id in drivers:
+			var c: Car = drivers[id].car
+			c.in_throttle = clampf(0.35 + 0.65 * sin(tt + float(id) * 1.7) * sin(tt * 0.37 + float(id)), 0.0, 1.0)
 
 	for car in cars:
 		if car.ctrl == Car.Ctrl.REMOTE:
@@ -162,8 +174,11 @@ func _process(delta: float) -> void:
 
 	_net_send(dt)
 	_update_camera(dt)
-	if engine and player:
-		engine.set_engine(player.speed, player.top_speed, player.in_throttle, player.nitro_active)
+
+
+func _ui(name: String) -> void:
+	ui_sound.stream = EngineSound.stream(name, false)
+	ui_sound.play()
 
 
 func _player_input() -> void:
@@ -250,6 +265,12 @@ func _collide() -> void:
 					var rv := (cb.vel - ca.vel).dot(nrm)
 					if rv < 0.0:
 						var j := -1.3 * rv / (1.0 / ma + 1.0 / mb)
+						if rv < -2.5:
+							var strength := clampf(-rv / 15.0, 0.15, 1.0)
+							if ca.sound and (ca == player or cb != player):
+								ca.sound.impact(strength)
+							elif cb.sound:
+								cb.sound.impact(strength)
 						if move_a:
 							ca.vel -= nrm * j / ma
 						if move_b:

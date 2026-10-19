@@ -458,6 +458,8 @@ func _update_garage() -> void:
 	_garage_info.add_child(vals)
 	for s in stats:
 		vals.add_child(UITheme.label("%s: %s   " % [s[0], s[1]], 20))
+	var eng: Dictionary = EngineDB.ENGINES.get(c.get("engine", "v8x"), {})
+	_garage_info.add_child(UITheme.label("Мотор: %s" % eng.get("name", "?"), 22, Color(1, 0.85, 0.45)))
 	var paints := HBoxContainer.new()
 	_garage_info.add_child(paints)
 	for i in CarDB.PAINTS.size():
@@ -500,7 +502,18 @@ func _settings() -> void:
 	vb.add_child(UITheme.button("Откалибровать наклон (держите телефон ровно)", calib, Vector2(0, 56)))
 	_selector(vb, "Камера", ["Ближняя", "Дальняя", "С капота"], int(s["camera"]), func(i): s["camera"] = i)
 	_selector(vb, "Тени", ["Выкл", "Вкл"], 1 if s["shadows"] else 0, func(i): s["shadows"] = i == 1)
-	_selector(vb, "Звук мотора", ["Выкл", "Вкл"], 1 if s["sound"] else 0, func(i): s["sound"] = i == 1)
+	_selector(vb, "Звук", ["Выкл", "Вкл"], 1 if s["sound"] else 0, func(i):
+		s["sound"] = i == 1
+		Game.apply_audio())
+	var vols := [0.2, 0.4, 0.6, 0.8, 1.0]
+	var vol_names := vols.map(func(v): return "%d%%" % int(v * 100))
+	var vi := 0
+	for k in vols.size():
+		if absf(float(vols[k]) - float(s["volume"])) < 0.05:
+			vi = k
+	_selector(vb, "Громкость", vol_names, vi, func(i):
+		s["volume"] = vols[i]
+		Game.apply_audio())
 	_selector(vb, "Показывать FPS", ["Нет", "Да"], 1 if s["show_fps"] else 0, func(i): s["show_fps"] = i == 1)
 	var bar := _bottom_bar()
 	var back := func():

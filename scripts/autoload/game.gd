@@ -16,6 +16,7 @@ var settings := {
 	"camera": 0,         # 0 — ближняя, 1 — дальняя, 2 — с капота
 	"shadows": true,
 	"sound": true,
+	"volume": 0.8,
 	"show_fps": false,
 }
 var records := {}        # "трасса|rev" -> {"time", "car", "name"}
@@ -33,6 +34,22 @@ func _ready() -> void:
 	if settings["player_name"] == "":
 		settings["player_name"] = "Игрок %d" % randi_range(100, 999)
 	get_tree().set_auto_accept_quit(true)
+	_setup_audio()
+
+
+func _setup_audio() -> void:
+	# лимитер на общей шине: громко, но без цифрового перегруза
+	var lim := AudioEffectHardLimiter.new()
+	lim.pre_gain_db = 2.0
+	lim.ceiling_db = -0.5
+	lim.release = 0.12
+	AudioServer.add_bus_effect(0, lim)
+	apply_audio()
+
+
+func apply_audio() -> void:
+	AudioServer.set_bus_mute(0, not bool(settings["sound"]))
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(float(settings["volume"]), 0.001)))
 
 
 func _setup_input() -> void:
@@ -197,6 +214,14 @@ func build_mp_grid(cfg: Dictionary, players: Dictionary) -> Array:
 		cls = CarDB.get_car(humans[0]["car"])["class"]
 	humans.append_array(_ai_entries(int(cfg["opponents"]), cls, -1))
 	return humans
+
+
+func _exit_tree() -> void:
+	# статические кэши мешей и звуков
+	CarModel._body_cache.clear()
+	CarModel._mat_cache.clear()
+	CarModel._wheel_cache.clear()
+	EngineSound._streams.clear()
 
 
 func _notification(what: int) -> void:

@@ -7,6 +7,7 @@ extends Node3D
 enum Ctrl { PLAYER, AI, REMOTE }
 
 signal lap_completed(car: Car, lap_time: float, is_best: bool)
+signal shifted(up: bool)
 
 var def: Dictionary
 var paint := 0
@@ -16,6 +17,8 @@ var driver_name := ""
 var track: Track
 var model: CarModel
 var name_label: Label3D
+var sound: EngineSound
+var eng: Dictionary
 
 var yaw := 0.0
 var vel := Vector3.ZERO
@@ -32,6 +35,14 @@ var offroad := false
 var wall_hit := 0.0
 var lat_acc := 0.0
 var lon_acc := 0.0
+var slip := 0.0            # 0..1 — насколько шины на пределе (для визга)
+
+# трансмиссия
+var rpm := 900.0
+var gear := 1
+var limiter := false
+var throttle_level := 0.0  # сглаженный газ
+var _shift_timer := 0.0
 
 var seg := 0
 var progress := 0.0
@@ -53,6 +64,7 @@ var net_yaw := 0.0
 var net_steer := 0.0
 var net_age := 0.0
 var net_nitro := false
+var net_throttle := 0.0
 
 
 func setup(d: Dictionary, p: int, t: Track) -> void:
@@ -64,11 +76,16 @@ func set_def(d: Dictionary, p: int) -> void:
 	def = d
 	paint = p
 	top_speed = d["top"] / 3.6
+	eng = EngineDB.ENGINES.get(d.get("engine", "v8x"), EngineDB.ENGINES["v8x"])
+	rpm = eng["idle"]
+	gear = 1
 	if model:
 		model.queue_free()
 	model = CarModel.new()
 	add_child(model)
 	model.build(def, paint)
+	if sound:
+		sound.refresh()
 
 
 func show_name(text: String) -> void:
@@ -137,6 +154,8 @@ func simulate(dt: float, time: float, frozen: bool) -> void:
 	if frozen:
 		vel = Vector3.ZERO
 		speed = 0.0
+		slip = 0.0
+		_update_drivetrain(dt, in_throttle, true)
 		model.animate(dt, 0.0, steer, 0.0, 0.0, in_brake > 0.1, false)
 		return
 
@@ -185,11 +204,17 @@ func simulate(dt: float, time: float, frozen: bool) -> void:
 	vr = lerpf(vr, 0.0, 1.0 - exp(-grip_k * dt))
 	vel = fwd * vf + rgt * vr
 	lat_acc = yaw_rate * vf
+	slip = clampf((absf(lat_acc) / a_lat_max - 0.8) * 4.0, 0.0, 1.0)
+	if in_brake > 0.6 and vf > 18.0:
+		slip = maxf(slip, 0.55 * in_brake)
+	if offroad:
+		slip = 0.0
 	lon_acc = (vf - vf0) / maxf(dt, 0.001)
 	speed = vf
 
 	position += vel * dt
 	rotation.y = yaw
+	_update_drivetrain(dt, in_throttle, false)
 	_constrain(dt)
 	_update_progress(time, dt)
 	model.animate(dt, speed, steer, lat_acc, lon_acc, in_brake > 0.1 and speed > 0.5, nitro_active)
@@ -259,10 +284,57 @@ func _update_race_dist() -> void:
 	race_dist = (lap - 1) * track.length + progress
 
 
+# ---------------------------------------------------------------- трансмиссия
+
+func _gear_top(g: int) -> float:
+	return top_speed * 1.08 * pow(float(g) / float(eng["gears"]), 0.72)
+
+
+## Обороты и автоматическое переключение передач (влияет только на звук и приборы).
+func _update_drivetrain(dt: float, throttle: float, frozen: bool) -> void:
+	throttle_level = move_toward(throttle_level, throttle, dt * 6.0)
+	var redline: float = eng["redline"]
+	var idle: float = eng["idle"]
+	var gears: int = eng["gears"]
+	var v := absf(speed)
+	limiter = false
+	var target: float
+	if gears <= 1:
+		# электромотор: обороты пропорциональны скорости
+		target = maxf(500.0, v / top_speed * redline * 0.92)
+		if frozen:
+			target = 500.0 + throttle_level * 1200.0
+	else:
+		_shift_timer = maxf(0.0, _shift_timer - dt)
+		var vmax_g := _gear_top(gear)
+		target = redline * v / vmax_g
+		if gear == 1 and v < vmax_g * 0.45:
+			target = maxf(target, lerpf(idle, redline * 0.5, throttle_level))
+		if frozen:
+			target = lerpf(idle, redline * 1.05, throttle_level)
+		elif _shift_timer <= 0.0:
+			if gear < gears and target > redline * 0.94 and throttle > 0.3:
+				gear += 1
+				_shift_timer = 0.22
+				shifted.emit(true)
+			elif gear > 1 and v < _gear_top(gear - 1) * 0.58:
+				gear -= 1
+				_shift_timer = 0.15
+				shifted.emit(false)
+		target = maxf(target, idle)
+		if target >= redline:
+			limiter = true
+			target = redline
+	var rate := 14.0 if target > rpm else 8.0
+	if _shift_timer > 0.1:
+		rate = 22.0
+	rpm = lerpf(rpm, target, 1.0 - exp(-rate * dt))
+
+
 # ---------------------------------------------------------------- сеть
 
 func net_state() -> Array:
-	return [position.x, position.z, yaw, vel.x, vel.z, steer, lap, progress, nitro_active]
+	return [position.x, position.z, yaw, vel.x, vel.z, steer, lap, progress, nitro_active, in_throttle]
 
 
 func apply_net_state(s: Array) -> void:
@@ -273,6 +345,8 @@ func apply_net_state(s: Array) -> void:
 	lap = s[6]
 	progress = s[7]
 	net_nitro = s[8]
+	if s.size() > 9:
+		net_throttle = s[9]
 	net_age = 0.0
 	_update_race_dist()
 
@@ -282,6 +356,7 @@ func update_remote(dt: float) -> void:
 	var predicted := net_pos + net_vel * minf(net_age, 0.35)
 	var k := 1.0 - exp(-12.0 * dt)
 	var old := position
+	var old_yaw := yaw
 	if position.distance_to(predicted) > 30.0:
 		position = predicted
 	else:
@@ -293,4 +368,8 @@ func update_remote(dt: float) -> void:
 	steer = net_steer
 	var info := track.project(position, seg)
 	seg = info["idx"]
+	lat_acc = angle_difference(old_yaw, yaw) / maxf(dt, 0.001) * speed
+	var grip: float = def["grip"]
+	slip = clampf((absf(lat_acc) / (grip * 9.81) - 0.8) * 4.0, 0.0, 1.0)
+	_update_drivetrain(dt, net_throttle, false)
 	model.animate(dt, speed, steer, 0.0, (position - old).length(), false, net_nitro)

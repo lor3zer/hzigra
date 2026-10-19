@@ -56,7 +56,6 @@ func _race(track_id: String, reverse: bool) -> void:
 	var grid := Game._ai_entries(5, "hyper", -1)
 	grid.append_array(Game._ai_entries(1, "sport", -10))
 	grid.append({"id": 1, "name": "P", "car": "kestrel_rs", "paint": 0, "ai": false})
-	Game.settings["sound"] = false
 	var race := Race.new()
 	add_child(race)
 	race.setup(cfg, grid)

@@ -12,6 +12,9 @@ var _best_label: Label
 var _speed_label: Label
 var _unit_label: Label
 var _nitro_bar: ProgressBar
+var _rpm_bar: ProgressBar
+var _rpm_fill: StyleBoxFlat
+var _gear_label: Label
 var _center_label: Label
 var _msg_label: Label
 var _wrong_label: Label
@@ -52,6 +55,17 @@ func setup(r: Race) -> void:
 	_unit_label = _lbl(22, Color(0.75, 0.85, 1.0), 0.5, 1, -110, -80, 220, 28)
 	_unit_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_unit_label.text = "км/ч"
+	_gear_label = _lbl(52, Color(1, 0.85, 0.3), 0.5, 1, -190, -138, 70, 66)
+	_gear_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_rpm_bar = ProgressBar.new()
+	_rpm_bar.max_value = 1.0
+	_rpm_bar.show_percentage = false
+	_rpm_fill = StyleBoxFlat.new()
+	_rpm_fill.bg_color = Color(1, 0.85, 0.3)
+	_rpm_fill.set_corner_radius_all(4)
+	_rpm_bar.add_theme_stylebox_override("fill", _rpm_fill)
+	_place(_rpm_bar, 0.5, 1, -150, -160, 300, 10)
+	_root.add_child(_rpm_bar)
 	_nitro_bar = ProgressBar.new()
 	_nitro_bar.max_value = 100.0
 	_nitro_bar.show_percentage = false
@@ -139,6 +153,16 @@ func _process(dt: float) -> void:
 	touch.nitro_level = p.nitro
 	_speed_label.text = str(int(absf(p.speed) * 3.6))
 	_nitro_bar.value = p.nitro
+	var rl: float = p.eng["redline"]
+	var r := clampf(p.rpm / rl, 0.0, 1.0)
+	_rpm_bar.value = r
+	_rpm_fill.bg_color = Color(1, 0.2, 0.15) if r > 0.92 else (Color(1, 0.6, 0.2) if r > 0.8 else Color(1, 0.85, 0.3))
+	if int(p.eng["gears"]) <= 1:
+		_gear_label.text = "D"
+	elif p.speed < -0.5 and p.in_brake > 0.1:
+		_gear_label.text = "R"
+	else:
+		_gear_label.text = str(p.gear)
 	_wrong_label.visible = p.wrong_way > 1.2 and race.mode == "race"
 	var t := race.race_time
 	if race.mode == "race":
