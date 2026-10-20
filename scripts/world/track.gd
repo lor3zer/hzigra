@@ -31,7 +31,8 @@ static var _tex_cache := {}
 var _rng := RandomNumberGenerator.new()
 
 
-func build(d: Dictionary, reverse: bool, tod: int, shadows: bool) -> void:
+## visuals = false — только геометрия для физики и ботов (выделенный сервер).
+func build(d: Dictionary, reverse: bool, tod: int, shadows: bool, visuals := true) -> void:
 	def = d
 	theme = d["theme"]
 	is_open = d.get("open", false)
@@ -46,6 +47,8 @@ func build(d: Dictionary, reverse: bool, tod: int, shadows: bool) -> void:
 		cps.reverse()
 		cps.push_front(first)
 	_sample(cps)
+	if not visuals:
+		return
 	_build_environment(tod, shadows)
 	_build_ground()
 	if is_open:

@@ -13,6 +13,8 @@ var _idx := -1
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	if Net.dedicated:
+		return
 	for i in range(1, 21):
 		var p := "res://audio/music/track%d.ogg" % i
 		if ResourceLoader.exists(p):
@@ -25,7 +27,7 @@ func _ready() -> void:
 
 
 func next() -> void:
-	if tracks.is_empty():
+	if tracks.is_empty() or player == null:
 		return
 	if _order.is_empty():
 		_order = range(tracks.size())
@@ -47,4 +49,6 @@ func title() -> String:
 
 
 func set_race(on: bool) -> void:
+	if player == null:
+		return
 	player.volume_db = -4.0 if on else 0.0

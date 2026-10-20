@@ -280,8 +280,10 @@ func show_results() -> void:
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.add_child(row)
 	if race.net:
-		if Net.is_host():
+		if Net.is_host() or Net.is_leader():
 			row.add_child(UITheme.button("В лобби", Net.return_to_lobby, Vector2(240, 64)))
+		elif Net.remote_dedicated:
+			row.add_child(UITheme.label("Сервер вернёт в лобби сам", 22))
 		else:
 			row.add_child(UITheme.label("Ждём хоста...", 22))
 		row.add_child(UITheme.button("Выйти", race.quit_to_menu, Vector2(200, 64)))

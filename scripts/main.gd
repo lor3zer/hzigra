@@ -10,9 +10,21 @@ var current: Node
 func _ready() -> void:
 	Game.main = self
 	Net.race_start.connect(start_race)
-	Net.back_to_lobby.connect(func(): show_menu("lobby"))
+	Net.back_to_lobby.connect(_on_back_to_lobby)
 	Net.server_lost.connect(_on_server_lost)
+	if Net.dedicated:
+		# выделенный сервер: без меню, ждём игроков
+		if Net.start_dedicated() != OK:
+			get_tree().quit(1)
+		return
 	show_menu("main")
+
+
+func _on_back_to_lobby() -> void:
+	if Net.dedicated:
+		_clear()
+		return
+	show_menu("lobby")
 
 
 func _clear() -> void:

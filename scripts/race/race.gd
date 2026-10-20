@@ -26,6 +26,8 @@ var _cam_yaw := 0.0
 var _send_timer := 0.0
 var _last_count := 0
 var _results_pending := false
+var server := false          # выделенный сервер: без графики, звука и интерфейса
+var _end_timer := -1.0
 
 
 func setup(c: Dictionary, g: Array) -> void:
@@ -35,10 +37,11 @@ func setup(c: Dictionary, g: Array) -> void:
 	net = bool(c.get("net", false))
 	laps = int(c.get("laps", 3))
 	cam_mode = int(Game.settings["camera"])
+	server = Net.dedicated
 
 	track = Track.new()
 	add_child(track)
-	track.build(TrackDB.get_track(c["track"]), bool(c["reverse"]), int(c["tod"]), bool(Game.settings["shadows"]))
+	track.build(TrackDB.get_track(c["track"]), bool(c["reverse"]), int(c["tod"]), bool(Game.settings["shadows"]), not server)
 
 	var my_id := Net.my_id() if net else 1
 	var skill := Game.difficulty_skill(int(c.get("difficulty", 1)))
@@ -61,11 +64,19 @@ func setup(c: Dictionary, g: Array) -> void:
 			drivers[car.peer_id] = AIDriver.new(car, track, sk, cars)
 		else:
 			car.ctrl = Car.Ctrl.REMOTE
-		if car != player and (net or mode == "race"):
+		if car != player and (net or mode == "race") and not server:
 			car.show_name(car.driver_name)
 		car.lap_completed.connect(_on_lap)
 		cars.append(car)
 		cars_by_id[car.peer_id] = car
+
+	Net.finish_reported.connect(_on_finish_reported)
+	if net:
+		Net.remote_state.connect(_on_remote_state)
+		Net.ai_states.connect(_on_ai_states)
+		Net.peer_left.connect(_on_peer_left)
+	if server:
+		return
 
 	camera = Camera3D.new()
 	camera.far = 4000.0
@@ -93,12 +104,6 @@ func setup(c: Dictionary, g: Array) -> void:
 	add_child(hud)
 	hud.setup(self)
 
-	Net.finish_reported.connect(_on_finish_reported)
-	if net:
-		Net.remote_state.connect(_on_remote_state)
-		Net.ai_states.connect(_on_ai_states)
-		Net.peer_left.connect(_on_peer_left)
-
 	if mode == "sandbox":
 		state = "racing"
 		countdown = 0.0
@@ -124,6 +129,8 @@ func _attach_headlight() -> void:
 # ---------------------------------------------------------------- цикл
 
 func _unhandled_input(event: InputEvent) -> void:
+	if hud == null:
+		return
 	if event.is_action_pressed("pause"):
 		hud.toggle_pause()
 	elif event.is_action_pressed("respawn"):
@@ -144,12 +151,14 @@ func _process(delta: float) -> void:
 		var n := ceili(countdown)
 		if n != _last_count and n <= 3 and n > 0:
 			_last_count = n
-			hud.set_countdown(n)
+			if hud:
+				hud.set_countdown(n)
 			_ui("beep")
 		if countdown <= 0.0:
 			state = "racing"
 			race_time = 0.0
-			hud.flash("СТАРТ!", Color(0.3, 1.0, 0.4), true)
+			if hud:
+				hud.flash("СТАРТ!", Color(0.3, 1.0, 0.4), true)
 			_ui("go")
 			if track.girl:
 				track.girl.go()
@@ -180,6 +189,8 @@ func _process(delta: float) -> void:
 		_collide_cones()
 
 	_net_send(dt)
+	if server:
+		_server_check_end(dt)
 	_update_camera(dt)
 
 
@@ -218,7 +229,38 @@ func _exit_tree() -> void:
 	Music.set_race(false)
 
 
+## Выделенный сервер сам возвращает всех в лобби: когда финишировали все люди,
+## через минуту после первого финиша или по общему лимиту времени.
+func _server_check_end(dt: float) -> void:
+	if state != "racing" or not Net.in_race:
+		return
+	var humans := 0
+	var done := 0
+	for c in cars:
+		if c.peer_id > 0:
+			humans += 1
+			if c.finished:
+				done += 1
+	var limit := laps * track.length / 12.0 + 120.0
+	if _end_timer < 0.0:
+		if humans > 0 and done == humans:
+			_end_timer = 8.0
+		elif done > 0:
+			_end_timer = 60.0
+		elif race_time > limit:
+			_end_timer = 0.0
+	else:
+		if humans > 0 and done == humans:
+			_end_timer = minf(_end_timer, 8.0)
+		_end_timer -= dt
+		if _end_timer <= 0.0:
+			_end_timer = 1e9
+			Net.return_to_lobby()
+
+
 func _ui(name: String) -> void:
+	if ui_sound == null:
+		return
 	ui_sound.stream = EngineSound.stream(name, false)
 	ui_sound.play()
 
@@ -470,7 +512,8 @@ func _on_peer_left(id: int) -> void:
 	var car: Car = cars_by_id.get(id)
 	if car == null:
 		return
-	hud.flash("%s покинул гонку" % car.driver_name, Color(1, 0.6, 0.3))
+	if hud:
+		hud.flash("%s покинул гонку" % car.driver_name, Color(1, 0.6, 0.3))
 	cars.erase(car)
 	cars_by_id.erase(id)
 	car.queue_free()

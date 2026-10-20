@@ -1,0 +1,24 @@
+[Unit]
+Description=Nitro Rush game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nitrorush
+Group=nitrorush
+EnvironmentFile=/etc/default/nitrorush
+WorkingDirectory=/var/lib/nitrorush
+ExecStart=/opt/nitrorush/NitroRushServer --headless -- --server --port=${PORT} --name=${NAME} --max-players=${MAX_PLAYERS} --bots=${BOTS}
+Restart=always
+RestartSec=3
+# изоляция: сервер не видит домашние папки и не может менять систему
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/nitrorush
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target

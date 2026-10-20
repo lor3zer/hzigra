@@ -21,6 +21,7 @@ var _garage_tab := "stats"
 var _garage_info: VBoxContainer
 var _garage_return := "main"
 var _toast_time := 0.0
+var _was_leader := false
 
 
 func _ready() -> void:
@@ -590,7 +591,7 @@ func _settings() -> void:
 # ---------------------------------------------------------------- сеть
 
 func _mp() -> void:
-	_set_title("Мультиплеер", "  локальная сеть (Wi-Fi / точка доступа)")
+	_set_title("Мультиплеер", "  Wi-Fi или выделенный сервер")
 	Net.leave()
 	Net.start_discovery()
 	var hb := HBoxContainer.new()
@@ -617,18 +618,19 @@ func _mp() -> void:
 		else:
 			_status.text = "Не удалось создать игру (ошибка %d)" % err
 	left.add_child(_accent_button("Создать игру", host, 540))
-	left.add_child(UITheme.label("Подключиться по IP:", 24))
+	left.add_child(UITheme.label("Адрес сервера или IP (можно с портом):", 22))
 	var row2 := HBoxContainer.new()
 	left.add_child(row2)
 	var ip_edit := LineEdit.new()
-	ip_edit.placeholder_text = "192.168.0.10"
+	ip_edit.placeholder_text = "192.168.0.10 или my.server.ru:24680"
+	ip_edit.text = str(Game.settings.get("last_server", ""))
 	ip_edit.custom_minimum_size = Vector2(320, 56)
-	ip_edit.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER_DECIMAL
+	ip_edit.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	row2.add_child(ip_edit)
 	row2.add_child(UITheme.button("Подключиться", func(): _join(ip_edit.text), Vector2(210, 56)))
 	var ips := Net.local_ips()
 	left.add_child(UITheme.label("Ваш IP: %s" % (", ".join(ips) if not ips.is_empty() else "нет сети"), 22, Color(0.7, 0.75, 0.85)))
-	var help := UITheme.label("Все телефоны должны быть в одной Wi-Fi сети или подключены\nк точке доступа одного из них. На iPhone разрешите\n«Локальная сеть» для игры в настройках.", 18, Color(0.6, 0.65, 0.75))
+	var help := UITheme.label("По Wi-Fi: все в одной сети или на точке доступа одного телефона.\nЧерез интернет: введите адрес выделенного сервера.\nНа iPhone разрешите «Локальная сеть» в настройках.", 18, Color(0.6, 0.65, 0.75))
 	left.add_child(help)
 	_status = UITheme.label("", 22, Color(1, 0.85, 0.4))
 	left.add_child(_status)
@@ -656,6 +658,7 @@ func _join(ip: String) -> void:
 	if ip.strip_edges() == "":
 		_status.text = "Введите IP хоста"
 		return
+	Game.settings["last_server"] = ip.strip_edges()
 	Game.save_settings()
 	var err := Net.join_game(ip)
 	if err != OK:
@@ -674,8 +677,10 @@ func _refresh_hosts() -> void:
 		return
 	for ip in Net.hosts:
 		var h: Dictionary = Net.hosts[ip]
-		var text := "%s  (%d/8)  %s" % [h["name"], h["count"], "идёт гонка" if h["racing"] else ip]
-		var b := UITheme.button(text, _join.bind(ip), Vector2(0, 60))
+		var kind := "[сервер] " if h.get("dedicated", false) else ""
+		var text := "%s%s  (%d)  %s" % [kind, h["name"], h["count"], "идёт гонка" if h["racing"] else ip]
+		var addr: String = ip if int(h.get("port", Net.PORT)) == Net.PORT else "%s:%d" % [ip, int(h["port"])]
+		var b := UITheme.button(text, _join.bind(addr), Vector2(0, 60))
 		b.disabled = h["racing"]
 		_hosts_box.add_child(b)
 
@@ -691,8 +696,11 @@ func _on_connection_result(ok: bool, message: String) -> void:
 
 func _lobby() -> void:
 	var ips := Net.local_ips()
+	_was_leader = _can_edit()
 	if Net.is_host():
 		_set_title("Лобби", "  вы хост · IP: %s" % (", ".join(ips) if not ips.is_empty() else "?"))
+	elif Net.remote_dedicated:
+		_set_title("Лобби", "  сервер «%s» · %s" % [Net.server_name, "вы лидер: выберите трассу и дайте старт" if _was_leader else "старт даёт лидер ★"])
 	else:
 		_set_title("Лобби", "  ожидание старта от хоста")
 	var hb := HBoxContainer.new()
@@ -722,12 +730,20 @@ func _lobby() -> void:
 		Net.leave()
 		open("mp")
 	bar.add_child(UITheme.button("Выйти", leave, Vector2(200, 70)))
-	if Net.is_host():
+	if _can_edit():
 		bar.add_child(_accent_button("СТАРТ ГОНКИ", Net.start_race, 300))
+
+
+func _can_edit() -> bool:
+	return Net.is_host() or Net.is_leader()
 
 
 func _on_players_changed() -> void:
 	if _screen != "lobby" or _lobby_players == null or not is_instance_valid(_lobby_players):
+		return
+	if _can_edit() != _was_leader:
+		# сменился лидер лобби — перестраиваем экран
+		open("lobby")
 		return
 	for c in _lobby_players.get_children():
 		c.queue_free()
@@ -737,7 +753,7 @@ func _on_players_changed() -> void:
 		var p: Dictionary = Net.players[id]
 		var c := CarDB.get_car(p["car"])
 		var tag := ""
-		if id == 1:
+		if id == Net.leader:
 			tag += " ★"
 		if id == me:
 			tag += " (вы)"
@@ -746,7 +762,7 @@ func _on_players_changed() -> void:
 
 
 func _on_config_changed() -> void:
-	if _screen == "lobby" and not Net.is_host():
+	if _screen == "lobby" and not _can_edit():
 		_build_lobby_cfg()
 
 
@@ -760,7 +776,7 @@ func _build_lobby_cfg() -> void:
 		_lobby_cfg.add_child(UITheme.label("Получение настроек...", 22))
 		return
 	var tracks := TrackDB.race_tracks()
-	if Net.is_host():
+	if _can_edit():
 		var names := []
 		var tidx := 0
 		for i in tracks.size():

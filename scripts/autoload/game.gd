@@ -19,6 +19,7 @@ var settings := {
 	"volume": 0.8,
 	"show_fps": false,
 	"music": 0.6,
+	"last_server": "",
 	"tuning": {},        # id машины -> {слот: вариант}
 }
 var records := {}        # "трасса|rev" -> {"time", "car", "name"}
