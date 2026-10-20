@@ -60,7 +60,7 @@
 
 ## Установка
 
-1. Скачайте из [Releases](https://github.com/lor3zer/php1611/releases) архив под архитектуру платы
+1. Скачайте из [Releases](https://github.com/lor3zer/hzigra/releases) архив под архитектуру платы
    (узнать её: `uname -m`):
    - `aarch64` → `NitroRushServer-arm64.tar.gz`
    - `armv7l` → `NitroRushServer-armhf.tar.gz`

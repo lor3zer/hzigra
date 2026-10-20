@@ -1,0 +1,140 @@
+name: Nitro Rush — Android APK и сервер
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Установка Godot и шаблонов экспорта
+        run: |
+          cd "$RUNNER_TEMP"
+          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" "$RUNNER_TEMP/godot"
+          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          T="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$T"
+          unzip -q -j "Godot_v${GODOT_VERSION}-stable_export_templates.tpz" "templates/android_*.apk" "templates/version.txt" \
+            "templates/linux_release.arm64" "templates/linux_release.arm32" "templates/linux_release.x86_64" -d "$T"
+          rm "Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p "$HOME/.config/godot"
+          printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\n' \
+            "$ANDROID_SDK_ROOT" "$JAVA_HOME" > "$HOME/.config/godot/editor_settings-${GODOT_VERSION}.tres"
+
+      - name: Ключ подписи
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_USER: ${{ secrets.ANDROID_KEYSTORE_USER }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KS_USER=$KEYSTORE_USER" >> "$GITHUB_ENV"
+            echo "KS_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.keystore" -alias nitrorush -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass nitrorush -keypass nitrorush -dname "CN=Nitro Rush, O=NitroRush, C=RU"
+            echo "KS_USER=nitrorush" >> "$GITHUB_ENV"
+            echo "KS_PASS=nitrorush" >> "$GITHUB_ENV"
+          fi
+
+      - name: Импорт проекта
+        run: timeout 300 "$RUNNER_TEMP/godot" --headless --editor --quit --path . || true
+
+      - name: Тесты (трассы, боты, меню)
+        run: |
+          timeout 900 "$RUNNER_TEMP/godot" --headless --fixed-fps 60 --path . res://tests/sim_test.tscn 2>&1 \
+            | grep -v -e 'Parameter "m" is null' -e 'mesh_storage.h' | tee test.log
+          grep -q "TESTS DONE, failures=0" test.log
+
+      - name: Сборка APK
+        run: |
+          mkdir -p build
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$RUNNER_TEMP/release.keystore" \
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER="$KS_USER" \
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="$KS_PASS" \
+            "$RUNNER_TEMP/godot" --headless --path . --export-release "Android" build/NitroRush.apk
+          ls -la build/NitroRush.apk
+
+      - name: Сборка выделенного сервера (arm64, armhf, x86_64)
+        run: |
+          mkdir -p build/server
+          for a in arm64 armhf x86_64; do
+            "$RUNNER_TEMP/godot" --headless --path . --export-release "Linux Server ($a)" "build/server/NitroRushServer.$a"
+            pkg="build/pkg/NitroRushServer"
+            rm -rf build/pkg && mkdir -p "$pkg"
+            cp "build/server/NitroRushServer.$a" server/install.sh server/nitrorush.conf server/nitrorush-server.service server/SERVER.md "$pkg/"
+            chmod +x "$pkg/install.sh" "$pkg/NitroRushServer.$a"
+            tar -C build/pkg -czf "build/NitroRushServer-$a.tar.gz" NitroRushServer
+          done
+          ls -la build/*.tar.gz
+
+      - name: Тест сервера (сервер + два клиента)
+        run: |
+          build/server/NitroRushServer.x86_64 --headless -- --port=24690 --bots=2 > server.log 2>&1 &
+          SP=$!
+          sleep 3
+          timeout 300 "$RUNNER_TEMP/godot" --headless --max-fps 60 --path . res://tests/server_test.tscn -- leader 127.0.0.1:24690 > leader.log 2>&1 &
+          LP=$!
+          sleep 2
+          timeout 300 "$RUNNER_TEMP/godot" --headless --max-fps 60 --path . res://tests/server_test.tscn -- guest 127.0.0.1:24690 > guest.log 2>&1 || true
+          wait $LP || true
+          kill $SP || true
+          grep -h "^\[" leader.log guest.log server.log || true
+          grep -q "\[leader\] OK" leader.log && grep -q "\[guest\] OK" guest.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NitroRush-apk
+          path: |
+            build/NitroRush.apk
+            build/NitroRushServer-*.tar.gz
+
+      - name: Публикация в GitHub Releases
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nitro-rush-v1.0.${{ github.run_number }}
+          name: Nitro Rush 1.0 (сборка ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: |
+            build/NitroRush.apk
+            build/NitroRushServer-arm64.tar.gz
+            build/NitroRushServer-armhf.tar.gz
+            build/NitroRushServer-x86_64.tar.gz
+          body: |
+            ## Nitro Rush — аркадные гонки для Android
+
+            **Установка:** скачайте `NitroRush.apk` ниже, откройте на телефоне и разрешите установку из неизвестных источников.
+
+            - Песочница: 6 карт (5 трасс + открытый Полигон), смена машины на ходу
+            - Извилистые трассы со шпильками и шиканами, трибуны со зрителями, стартовая девушка с флагами
+            - Текстуры, деревья, дома и хижины вокруг трасс; атмосферные звуки и музыка
+            - Гонка с настройкой: трасса, направление, круги, соперники, сложность, время суток, столкновения
+            - 20 машин: 10 «Спорт» и 10 «Гипер», 12 разных силуэтов кузова, 10 цветов
+            - Звуки моторов на физической модели: V8, V10, V12, W16, турбо-4/6, оппозитная 6, электро
+            - Тюнинг: антикрылья, бамперы, пороги, диффузор, капот, диски
+            - Мультиплеер по Wi-Fi до 8 игроков (автопоиск игр или подключение по IP)
+            - Управление кнопками или наклоном телефона
+
+            - Выделенный сервер для Armbian / Debian / Ubuntu: `NitroRushServer-arm64.tar.gz` (большинство плат), `-armhf` (32-битные), `-x86_64`. Установка: `sudo ./install.sh`, подробности в SERVER.md внутри архива
+
+            Требования: Android 5.0+ (arm64 / armv7). Порты мультиплеера: UDP 24680–24681.

@@ -84,8 +84,8 @@ tests/                 headless-тесты и запись демо (в сбор
 
 ### Android (APK)
 
-**Вариант 1 — GitHub Actions.** Workflow `.github/workflows/android-apk.yml` собирает APK
-при каждом пуше в `racing-game/`. Готовый файл лежит в *Actions → запуск → Artifacts → NitroRush-apk*.
+**Вариант 1 — GitHub Actions.** Workflow `.github/workflows/build.yml` собирает APK и сервер
+при каждом пуше в `main`. Готовый файл лежит в *Actions → запуск → Artifacts → NitroRush-apk*.
 Чтобы обновления ставились поверх старой версии, добавьте в секреты репозитория свой keystore:
 `ANDROID_KEYSTORE_BASE64` (`base64 -w0 my.keystore`), `ANDROID_KEYSTORE_USER`, `ANDROID_KEYSTORE_PASSWORD`.
 Без секретов каждая сборка подписывается новым ключом: перед установкой удалите старую версию.
