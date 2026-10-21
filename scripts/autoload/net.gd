@@ -24,7 +24,7 @@ const PORT := 24680
 const DISCOVERY_PORT := 24681
 const MAGIC := "NITRORUSH1"
 const MAX_PLAYERS := 8
-const PROTOCOL := 3          # меняется при несовместимых изменениях сетевого кода
+const PROTOCOL := 2          # меняется при несовместимых изменениях сетевого кода
 
 var players := {}            # peer_id -> {"name", "car", "paint", "tune"}
 var config := {}             # настройки гонки
