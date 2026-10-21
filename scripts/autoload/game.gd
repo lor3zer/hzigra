@@ -8,7 +8,7 @@ const AI_NAMES := ["Макс", "Алекс", "Луиза", "Кира", "Тиму
 
 var settings := {
 	"player_name": "",
-	"car": "kestrel_rs",
+	"car": "audax_s8",
 	"paint": 0,
 	"steering": 0,       # 0 — кнопки, 1 — наклон
 	"tilt_sens": 1.0,
@@ -126,6 +126,10 @@ func load_settings() -> void:
 	last_race.merge(lr, true)
 	var ls: Dictionary = cfg.get_value("data", "last_sandbox", {})
 	last_sandbox.merge(ls, true)
+	# машина из старой версии каталога
+	if not CarDB.has_car(str(settings["car"])):
+		settings["car"] = CarDB.CARS[0]["id"]
+		settings["paint"] = CarDB.CARS[0]["paint"]
 
 
 func save_settings() -> void:
@@ -201,6 +205,8 @@ func _ai_entries(count: int, cls: String, start_id: int) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	var pool := CarDB.cars_of_class(cls)
+	if pool.is_empty():
+		pool = CarDB.CARS
 	var names := AI_NAMES.duplicate()
 	names.shuffle()
 	var out := []

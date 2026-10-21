@@ -55,7 +55,7 @@ func _race(track_id: String, reverse: bool) -> void:
 		"reverse": reverse, "tod": 2 if track_id == "city" else 0, "collisions": true}
 	var grid := Game._ai_entries(5, "hyper", -1)
 	grid.append_array(Game._ai_entries(1, "sport", -10))
-	grid.append({"id": 1, "name": "P", "car": "kestrel_rs", "paint": 0, "ai": false, "tune": {"wing": 3, "front": 2, "skirts": 1, "rear": 1, "hood": 1, "rims": 2}})
+	grid.append({"id": 1, "name": "P", "car": "audax_s8", "paint": 0, "ai": false, "tune": {"wing": 3, "front": 2, "skirts": 1, "rear": 1, "hood": 1, "rims": 2}})
 	var race := Race.new()
 	add_child(race)
 	race.setup(cfg, grid)

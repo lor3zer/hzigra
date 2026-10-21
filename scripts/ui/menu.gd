@@ -210,6 +210,17 @@ func _preview(parent: Control, car_id: String, paint: int) -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.55, 0.6, 0.75)
 	env.ambient_light_energy = 0.8
+	# небо только для отражений в металлике
+	var sky := Sky.new()
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.25, 0.4, 0.7)
+	sky_mat.sky_horizon_color = Color(0.75, 0.82, 0.92)
+	sky_mat.ground_horizon_color = Color(0.4, 0.45, 0.55)
+	sky_mat.ground_bottom_color = Color(0.12, 0.14, 0.2)
+	sky.sky_material = sky_mat
+	env.sky = sky
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var we := WorldEnvironment.new()
 	we.environment = env
 	vp.add_child(we)
@@ -236,7 +247,7 @@ func _preview(parent: Control, car_id: String, paint: int) -> void:
 	floor_mi.position.y = -0.03
 	vp.add_child(floor_mi)
 	_preview_pivot = Node3D.new()
-	_preview_pivot.rotation.y = 0.6
+	_preview_pivot.rotation.y = 2.4
 	vp.add_child(_preview_pivot)
 	_preview_model = CarModel.new()
 	_preview_pivot.add_child(_preview_model)
@@ -382,7 +393,7 @@ func _sandbox_setup() -> void:
 
 
 func _garage() -> void:
-	_set_title("Гараж", "  %d машин: спорт и гипер" % CarDB.CARS.size())
+	_set_title("Гараж", "  классы: спорт, супер, гипер, ралли")
 	_garage_sel = Game.settings["car"]
 	_garage_paint = int(Game.settings["paint"])
 	_garage_tune = Game.get_tune(_garage_sel)
@@ -397,8 +408,14 @@ func _garage() -> void:
 	var list := VBoxContainer.new()
 	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(list)
-	for cls in ["sport", "hyper"]:
-		list.add_child(UITheme.label(CarDB.CLASS_NAMES[cls].to_upper(), 24, UITheme.ACCENT if cls == "sport" else UITheme.ACCENT2))
+	for info in CarDB.CLASSES:
+		var cls: String = info["id"]
+		list.add_child(UITheme.label(str(info["name"]).to_upper(), 24, info["color"]))
+		if info.get("wip", false):
+			var wip := UITheme.button("В разработке", func(): pass, Vector2(330, 54))
+			wip.disabled = true
+			list.add_child(wip)
+			continue
 		for c in CarDB.cars_of_class(cls):
 			var id: String = c["id"]
 			var pick := func():
@@ -438,7 +455,7 @@ func _update_garage() -> void:
 	var top := HBoxContainer.new()
 	_garage_info.add_child(top)
 	top.add_child(UITheme.label(c["name"], 34, Color.WHITE))
-	top.add_child(UITheme.label("  " + CarDB.CLASS_NAMES[c["class"]], 26, UITheme.ACCENT if c["class"] == "sport" else UITheme.ACCENT2))
+	top.add_child(UITheme.label("  " + CarDB.CLASS_NAMES[c["class"]], 26, CarDB.class_info(c["class"])["color"]))
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(spacer)
@@ -459,10 +476,10 @@ func _update_garage() -> void:
 	_garage_info.add_child(grid)
 	var t100 := CarDB.zero_to_100(c)
 	var stats := [
-		["Скорость", "%d км/ч" % int(c["top"]), (c["top"] - 200.0) / 240.0],
-		["0-100", "%.1f с" % t100, (5.0 - t100) / 3.2],
-		["Управление", "%.2f" % c["handling"], (c["handling"] - 1.3) / 0.75],
-		["Сцепление", "%.2f g" % c["grip"], (c["grip"] - 1.7) / 1.1],
+		["Скорость", "%d км/ч" % int(c["top"]), (c["top"] - 250.0) / 120.0],
+		["0-100", "%.1f с" % t100, (4.6 - t100) / 2.0],
+		["Управление", "%.2f" % c["handling"], (c["handling"] - 1.3) / 0.7],
+		["Сцепление", "%.2f g" % c["grip"], (c["grip"] - 1.6) / 1.1],
 	]
 	for s in stats:
 		var l := UITheme.label(s[0], 20, Color(0.7, 0.75, 0.85))
@@ -480,7 +497,8 @@ func _update_garage() -> void:
 	for s in stats:
 		vals.add_child(UITheme.label("%s: %s   " % [s[0], s[1]], 20))
 	var eng: Dictionary = EngineDB.ENGINES.get(c.get("engine", "v8x"), {})
-	_garage_info.add_child(UITheme.label("Мотор: %s" % eng.get("name", "?"), 22, Color(1, 0.85, 0.45)))
+	var gears: int = c.get("gears", eng.get("gears", 6))
+	_garage_info.add_child(UITheme.label("Мотор: %s · %d передач · %d кг" % [eng.get("name", "?"), gears, int(c["mass"])], 22, Color(1, 0.85, 0.45)))
 	var paints := HBoxContainer.new()
 	_garage_info.add_child(paints)
 	for i in CarDB.PAINTS.size():

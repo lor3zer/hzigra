@@ -24,7 +24,7 @@ const PORT := 24680
 const DISCOVERY_PORT := 24681
 const MAGIC := "NITRORUSH1"
 const MAX_PLAYERS := 8
-const PROTOCOL := 2          # меняется при несовместимых изменениях сетевого кода
+const PROTOCOL := 3          # меняется при несовместимых изменениях сетевого кода
 
 var players := {}            # peer_id -> {"name", "car", "paint", "tune"}
 var config := {}             # настройки гонки
@@ -229,7 +229,10 @@ func _register(info: Dictionary) -> void:
 		_kick(id, "Сервер заполнен")
 		return
 	var is_new := not players.has(id)
-	players[id] = {"name": str(info.get("name", "Игрок")).left(20), "car": str(info.get("car", "kestrel_rs")),
+	var car_id := str(info.get("car", ""))
+	if not CarDB.has_car(car_id):
+		car_id = CarDB.CARS[0]["id"]
+	players[id] = {"name": str(info.get("name", "Игрок")).left(20), "car": car_id,
 		"paint": int(info.get("paint", 0)), "tune": Game.sanitize_tune(info.get("tune", {}))}
 	if leader == 0 or not players.has(leader):
 		leader = id

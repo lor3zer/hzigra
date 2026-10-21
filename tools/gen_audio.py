@@ -34,6 +34,11 @@ ENGINES = {
     "w16": dict(name="W16, четыре турбины", idle=750, redline=7000, gears=7, turbo=True, pops=False),
 }
 
+# моторы на чужих семплах: другой паспорт (турбина, обороты), тот же звук
+ALIASES = {
+    "v8tt": dict(base="v8x", name="V8 битурбо (кросс-плейн)", idle=700, redline=6800, gears=6, turbo=True, pops=True),
+}
+
 EV = dict(name="Электро", lo=3000, hi=10000, off=6000, idle=0, redline=14000, gears=1, turbo=False, pops=False)
 
 
@@ -336,6 +341,11 @@ def main():
             write_wav(f"eng_{key}_{layer}.wav", x / 32768.0, rms=0.17 if layer == "off" else 0.25)
         db[key] = dict(name=p["name"], lo_rpm=ge["lo"], hi_rpm=ge["hi"], off_rpm=ge["off"], idle=p["idle"],
                        redline=p["redline"], gears=p["gears"], turbo=p["turbo"], pops=p["pops"])
+    for key, p in ALIASES.items():
+        d = dict(db[p["base"]])
+        d.update(name=p["name"], idle=p["idle"], redline=p["redline"], gears=p["gears"], turbo=p["turbo"], pops=p["pops"],
+                 samples=p["base"])
+        db[key] = d
     print("ev")
     lo, lo_rpm = ev_loop(EV["lo"], 1.0)
     hi, hi_rpm = ev_loop(EV["hi"], 1.0)
@@ -382,8 +392,9 @@ def main():
         "const ENGINES := {",
     ]
     for key, d in db.items():
+        smp = f'"samples": "{d["samples"]}", ' if "samples" in d else ""
         lines.append(
-            f'\t"{key}": {{"name": "{d["name"]}", "lo_rpm": {d["lo_rpm"]:.1f}, "hi_rpm": {d["hi_rpm"]:.1f}, '
+            f'\t"{key}": {{"name": "{d["name"]}", {smp}"lo_rpm": {d["lo_rpm"]:.1f}, "hi_rpm": {d["hi_rpm"]:.1f}, '
             f'"off_rpm": {d["off_rpm"]:.1f}, "idle": {float(d["idle"]):.1f}, "redline": {float(d["redline"]):.1f}, '
             f'"gears": {d["gears"]}, "turbo": {str(d["turbo"]).lower()}, "pops": {str(d["pops"]).lower()}}},')
     lines.append("}")

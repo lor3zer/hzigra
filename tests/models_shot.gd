@@ -48,7 +48,7 @@ func _ready() -> void:
 		if args.size() > 3 and args[3] == "tuned":
 			tune = {"wing": 3 + i % 2, "front": 1 + i % 2, "skirts": 1, "rear": 1, "hood": 1 + i % 2, "rims": 1 + i % 4, "rim_color": 1 + i % 4}
 		m.build(c, int(c["paint"]), tune)
-		m.position = Vector3((i % 5) * 6.0, 0, (i / 5) * 7.0)
+		m.position = Vector3((i % 5) * 6.5, 0, (i / 5) * 7.0)
 		m.rotation.y = -0.75
 		var l := Label3D.new()
 		l.text = c["name"]

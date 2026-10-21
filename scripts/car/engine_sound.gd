@@ -64,7 +64,7 @@ func refresh() -> void:
 	for ch in get_children():
 		ch.queue_free()
 	_shots.clear()
-	var k: String = car.def.get("engine", "v8x")
+	var k: String = car.eng.get("samples", car.def.get("engine", "v8x"))
 	_lo = _loop("eng_%s_lo" % k)
 	_hi = _loop("eng_%s_hi" % k)
 	_off = _loop("eng_%s_off" % k) if local else null

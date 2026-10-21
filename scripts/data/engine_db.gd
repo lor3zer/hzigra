@@ -2,12 +2,14 @@ class_name EngineDB
 extends RefCounted
 
 ## Сгенерировано tools/gen_audio.py — не править вручную.
-## *_rpm — обороты, на которых записан семпл (для транспонирования).
+## *_rpm — обороты, на которых записан семпл (для транспонирования);
+## samples — чьи семплы использовать (если не свои).
 
 const ENGINES := {
 	"i4t": {"name": "Рядная 4, турбо", "lo_rpm": 2600.0, "hi_rpm": 6800.0, "off_rpm": 4200.0, "idle": 950.0, "redline": 7300.0, "gears": 6, "turbo": true, "pops": true},
 	"f6": {"name": "Оппозитная 6", "lo_rpm": 3000.0, "hi_rpm": 8200.0, "off_rpm": 5000.0, "idle": 900.0, "redline": 9000.0, "gears": 7, "turbo": false, "pops": true},
 	"v8x": {"name": "V8 (кросс-плейн)", "lo_rpm": 2300.0, "hi_rpm": 6200.0, "off_rpm": 3800.0, "idle": 800.0, "redline": 6900.0, "gears": 6, "turbo": false, "pops": true},
+	"v8tt": {"name": "V8 битурбо (кросс-плейн)", "samples": "v8x", "lo_rpm": 2300.0, "hi_rpm": 6200.0, "off_rpm": 3800.0, "idle": 700.0, "redline": 6800.0, "gears": 6, "turbo": true, "pops": true},
 	"v8f": {"name": "V8 битурбо (флэт-плейн)", "lo_rpm": 3000.0, "hi_rpm": 8000.0, "off_rpm": 5000.0, "idle": 950.0, "redline": 8600.0, "gears": 7, "turbo": true, "pops": true},
 	"i6t": {"name": "Рядная 6, битурбо", "lo_rpm": 2600.0, "hi_rpm": 7000.0, "off_rpm": 4200.0, "idle": 850.0, "redline": 7600.0, "gears": 6, "turbo": true, "pops": true},
 	"v10": {"name": "V10", "lo_rpm": 3200.0, "hi_rpm": 8600.0, "off_rpm": 5200.0, "idle": 1000.0, "redline": 9000.0, "gears": 7, "turbo": false, "pops": true},

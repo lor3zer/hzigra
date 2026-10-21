@@ -77,7 +77,9 @@ func set_def(d: Dictionary, p: int, tn: Dictionary = {}) -> void:
 	def = d
 	paint = p
 	top_speed = d["top"] / 3.6
-	eng = EngineDB.ENGINES.get(d.get("engine", "v8x"), EngineDB.ENGINES["v8x"])
+	eng = EngineDB.ENGINES.get(d.get("engine", "v8x"), EngineDB.ENGINES["v8x"]).duplicate()
+	if d.has("gears"):
+		eng["gears"] = d["gears"]
 	rpm = eng["idle"]
 	gear = 1
 	if model:
