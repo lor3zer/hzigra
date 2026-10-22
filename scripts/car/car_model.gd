@@ -2,17 +2,23 @@ class_name CarModel
 extends Node3D
 
 ## Модель машины по описанию из CarBodies.
-## Кузов — поверхность из поперечных сечений (loft): профили вида сбоку
-## (порог, линия максимальной ширины, плечо, капот, крыша) и сверху (ширина,
-## завал боковин). Фары, решётки, воздухозаборники и фонари — плоские
-## «наклейки», спроецированные на кузов спереди, сзади, сбоку или сверху.
+## Кузов строится по каркасу, как у моделлеров: станции поперёк машины, в каждой
+## 9 опорных точек половины сечения (от нижней кромки до центра крыши/капота).
+## Сечение — гладкая кривая через опорные точки (острые рёбра задаются отдельно),
+## вдоль машины точки плавно интерполируются между станциями. Колёсные арки
+## вырезаются по окружности (или трапеции) вокруг колёс.
+## Фары, решётки, воздухозаборники и фонари — «наклейки», спроецированные на кузов
+## спереди, сзади, сбоку или сверху, с объёмом (корпуса, ободки, рёбра).
 ## Зеркала, антикрылья, выхлоп, сплиттер — простые призмы.
 ## Всё статичное сливается в один меш по материалам (несколько draw call'ов
 ## на машину) и кэшируется по машине и тюнингу.
 ## Машина смотрит в -Z, начало координат — центр на уровне земли.
 
-const HALF := 12            # точек в половине сечения (P0 — низ по центру, P11 — верх по центру)
-const RING := 22            # точек в полном кольце
+const NCTL := 9             # опорных точек в половине сечения: c1 (низ боковины) … c9 (центр верха)
+const SPAN := 2             # отрезков кривой между соседними опорными точками
+const PRE := 3              # служебные точки перед c1: низ по центру и стенка арки
+const HALF := PRE + (NCTL - 1) * SPAN + 1   # точек в половине сечения
+const RING := HALF * 2 - 2                  # точек в полном кольце
 const PART_UV := Vector2(0.5, 0.01)   # место текстуры деталей без швов (для навесных деталей)
 
 ## Тюнинг: одинаковый набор для всех машин (0 — заводской вариант).
@@ -73,6 +79,8 @@ var _tune: Dictionary = {}
 var _tools := {}
 var _detail := false        # пишем в меш мелких деталей (скрывается вдали)
 var _sec_cache := {}
+var _net: Array = []         # кривые каркаса: [0] — низ, [1..18] — x,y опорных точек c1..c9
+var _crease: Array = []
 var _fine_front: Array = []
 var _fine_rear: Array = []
 
@@ -193,30 +201,41 @@ static func _slope(pts: Array, i: int) -> float:
 	return 2.0 * dp * dn / (dp + dn)
 
 
-func _cv(key: String, t: float) -> float:
-	return _curve(_b[key], t)
+## Опорные точки сечения c0..c9 в точке t (c0 — низ по центру).
+func _ctl(t: float) -> Array:
+	var yb := _curve(_net[0], t)
+	var c: Array = [Vector2(0, yb)]
+	for j in NCTL:
+		c.append(Vector2(maxf(_curve(_net[1 + j * 2], t), 0.0), _curve(_net[2 + j * 2], t)))
+	c[NCTL] = Vector2(0.0, (c[NCTL] as Vector2).y)
+	return c
 
 
-## Высота крыши по оси; 0 — вне остекления.
-func _roof(t: float) -> float:
-	var pts: Array = _b["roof"]
-	if t < float(pts[0][0]) or t > float(pts[pts.size() - 1][0]):
-		return 0.0
-	return _curve(pts, t)
+## Центростремительный Catmull-Rom: точка между p1 и p2.
+static func _cr(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, u: float) -> Vector2:
+	var t0 := 0.0
+	var t1 := t0 + maxf(sqrt(p0.distance_to(p1)), 1e-3)
+	var t2 := t1 + maxf(sqrt(p1.distance_to(p2)), 1e-3)
+	var t3 := t2 + maxf(sqrt(p2.distance_to(p3)), 1e-3)
+	var tt := lerpf(t1, t2, u)
+	var a1 := p0 * ((t1 - tt) / (t1 - t0)) + p1 * ((tt - t0) / (t1 - t0))
+	var a2 := p1 * ((t2 - tt) / (t2 - t1)) + p2 * ((tt - t1) / (t2 - t1))
+	var a3 := p2 * ((t3 - tt) / (t3 - t2)) + p3 * ((tt - t2) / (t3 - t2))
+	var b1 := a1 * ((t2 - tt) / (t2 - t0)) + a2 * ((tt - t0) / (t2 - t0))
+	var b2 := a2 * ((t3 - tt) / (t3 - t1)) + a3 * ((tt - t1) / (t3 - t1))
+	return b1 * ((t2 - tt) / (t2 - t1)) + b2 * ((tt - t1) / (t2 - t1))
 
 
-## Поперечное сечение (правая половина): 12 точек от низа по центру до верха по центру.
-## P1-P2 — внутренняя стенка колёсной арки, P3 — нижняя кромка боковины,
-## P4 — ребро порога, P5 — линия максимальной ширины, P7 — плечо,
-## P8..P11 — крышка капота/багажника или остекление и крыша.
+## Поперечное сечение (правая половина): низ по центру, стенка колёсной арки,
+## затем гладкая кривая через c1..c9. «c» — опорные точки для деталей.
 func _sec(t: float) -> Dictionary:
 	var key := snappedf(t, 0.00001)
 	if _sec_cache.has(key):
 		return _sec_cache[key]
 	var z := -_L * 0.5 + t * _L
 	var hw := _W * 0.5
-	var w := hw * _cv("w", t)
-	var yb := _c + _cv("lo", t)
+	var c := _ctl(t)
+	var yb: float = (c[0] as Vector2).y
 	var ya := yb
 	var hex: bool = _b.get("arch", "round") == "hex"
 	for i in 2:
@@ -231,54 +250,73 @@ func _sec(t: float) -> Dictionary:
 			else:
 				up = sqrt(ra * ra - dz * dz)
 			ya = maxf(ya, float(_wr[i]) + up - 0.01)
-	var y_zh := maxf(_cv("zh", t), ya + 0.05)
-	var y_sh := maxf(_cv("sh", t), y_zh + 0.04)
-	var y_top := _cv("top", t)
-	var ws := w * _cv("tuck", t)
-	var y_roof := _roof(t)
-	var base := maxf(y_sh, y_top)
-	var g := clampf((y_roof - base) / 0.06, 0.0, 1.0)
-	g = g * g * (3.0 - 2.0 * g)
-	var wi := minf(w * 0.86, hw - maxf(float(_tire[0]), float(_tire[1])) - 0.07)
+	var c1: Vector2 = c[1]
+	var wi := minf(c1.x * 0.95, hw - maxf(float(_tire[0]), float(_tire[1])) - 0.07)
 	var p := PackedVector2Array()
-	p.resize(HALF)
-	p[0] = Vector2(0, yb)
-	p[1] = Vector2(wi, yb)
-	p[2] = Vector2(wi, ya)
-	p[3] = Vector2(w * 0.955, ya)
-	# выемка на боковине (scallop): линия максимальной ширины уходит внутрь
-	var sc := _cv("scallop", t) if _b.has("scallop") else 0.0
-	p[4] = Vector2(w * 0.987 - sc * 0.6, minf(ya + 0.075, y_zh - 0.02))
-	p[5] = Vector2(w - sc, y_zh)
-	p[6] = Vector2(lerpf(w, ws, 0.4) - sc * 0.4, lerpf(y_zh, y_sh, 0.55))
-	p[7] = Vector2(ws, y_sh)
-	var gw := ws * _cv("ghw", t)
-	var gt := minf(hw * _cv("ght", t), gw - 0.03)
-	var hood := [Vector2(ws * 0.9, y_sh + 0.006 + (y_top - y_sh) * 0.2), Vector2(ws * 0.6, lerpf(y_sh, y_top, 0.75)),
-		Vector2(ws * 0.3, lerpf(y_sh, y_top, 0.96)), Vector2(0, y_top)]
-	var glass := [Vector2(gw, y_sh + 0.012), Vector2(gt, y_roof - 0.045), Vector2(gt * 0.55, y_roof - 0.01), Vector2(0, y_roof)]
-	for i in 4:
-		p[8 + i] = (hood[i] as Vector2).lerp(glass[i], g)
-	var s := {"t": t, "z": z, "p": p, "g": g, "yb": yb, "ya": ya, "y_sh": y_sh, "y_zh": y_zh}
+	p.append(Vector2(0, yb))
+	p.append(Vector2(wi, yb))
+	p.append(Vector2(wi, maxf(yb, ya)))
+	# кривая через опорные точки; за c9 — зеркальная c8 (гладкий верх по оси)
+	var ext: Array = [c1 * 2.0 - (c[2] as Vector2)]
+	for j in range(1, NCTL + 1):
+		ext.append(c[j])
+	var c8: Vector2 = c[NCTL - 1]
+	ext.append(Vector2(-c8.x, c8.y))
+	var low_end := PRE + 3 * SPAN       # арка режет боковину ниже c4
+	for j in range(1, NCTL):
+		var p0: Vector2 = ext[j - 1]
+		var p1: Vector2 = ext[j]
+		var p2: Vector2 = ext[j + 1]
+		var p3: Vector2 = ext[j + 2]
+		if j in _crease:
+			p0 = p1
+		if j + 1 in _crease:
+			p3 = p2
+		for k in SPAN:
+			var q := _cr(p0, p1, p2, p3, float(k) / SPAN)
+			if p.size() <= low_end:
+				q.y = maxf(q.y, ya)
+			p.append(q)
+	p.append(c[NCTL])
+	var s := {"t": t, "z": z, "p": p, "c": c, "yb": yb, "ya": ya}
 	_sec_cache[key] = s
 	return s
 
 
-## Точка на поверхности: t — вдоль машины, u — по половине кольца (0..11).
+## Индекс точки сечения для опорной точки j (1..9).
+static func _ci(j: int) -> int:
+	return PRE + (j - 1) * SPAN
+
+
+## Точка на поверхности: t — вдоль машины, u — номер опорной точки (0..9, дробный).
 func _surf(t: float, u: float, side: float) -> Vector3:
 	var p: PackedVector2Array = _sec(t)["p"]
-	var i := clampi(int(floor(u)), 0, HALF - 2)
-	var q := p[i].lerp(p[i + 1], clampf(u - i, 0.0, 1.0))
+	var f: float
+	if u <= 1.0:
+		f = u * PRE
+	else:
+		f = PRE + (u - 1.0) * SPAN
+	var i := clampi(int(floor(f)), 0, HALF - 2)
+	var q := p[i].lerp(p[i + 1], clampf(f - i, 0.0, 1.0))
 	return Vector3(q.x * side, q.y, -_L * 0.5 + t * _L)
+
+
+## Номер опорной точки (дробный) для точки сечения i — для текстуры швов.
+static func _u_of(i: int) -> float:
+	if i <= PRE:
+		return float(i) / PRE
+	return 1.0 + float(i - PRE) / SPAN
 
 
 # ---------------------------------------------------------------- кузов
 
 func _t_list() -> Array:
 	var ts := []
-	var n := 46
+	var n := 34
 	for i in n:
 		ts.append(0.5 - 0.5 * cos(PI * float(i) / (n - 1)))
+	for st in _b["net"]:
+		ts.append(float(st[0]))
 	var axles: Array = _b["axles"]
 	for i in 2:
 		var ra: float = (float(_wr[i]) + 0.06) / _L
@@ -305,21 +343,26 @@ func _t_list() -> Array:
 	return out
 
 
-func _panel_mat(k: int, t: float, g: float) -> String:
-	if k <= 2:
+## Материал отрезка k половины сечения в точке t.
+## Промежутки опорных точек: 1-5 — боковина и плечо, 6 (c6-c7) — боковое окно,
+## 7-8 (c7-c9) — крыша, лобовое и заднее стекло; вне кабины — капот и крышка.
+func _panel_mat(k: int, t: float) -> String:
+	if k < PRE:
 		return "dark"
-	if k <= 7:
-		return "paint"
-	if g < 0.5:
-		if k >= 9:
-			for d in _b.get("deck", []):
-				if t >= float(d[0]) and t <= float(d[1]):
-					return d[2]
+	var j := (k - PRE) / SPAN + 1
+	if j <= 5:
 		return "paint"
 	var ws: Array = _b["ws"]
 	var side: Array = _b["side"]
 	var rear: Array = _b.get("rear", [])
-	if k == 8:
+	var cab_end: float = float(rear[1]) if not rear.is_empty() else float(side[1])
+	if t < float(ws[0]) or t > cab_end:
+		if j >= 7:
+			for d in _b.get("deck", []):
+				if t >= float(d[0]) and t <= float(d[1]):
+					return d[2]
+		return "paint"
+	if j == 6:
 		if t >= float(side[0]) and t <= float(side[1]):
 			for pl in _b.get("pillars", []):
 				if absf(t - float(pl[0])) <= float(pl[1]) + 0.0001:
@@ -330,7 +373,7 @@ func _panel_mat(k: int, t: float, g: float) -> String:
 		return "paint"
 	if t <= float(ws[1]):
 		return "glass"
-	if not rear.is_empty() and t >= float(rear[0]) and t <= float(rear[1]):
+	if not rear.is_empty() and t >= float(rear[0]):
 		return "glass"
 	return _b.get("roof_mat", "paint")
 
@@ -338,13 +381,11 @@ func _panel_mat(k: int, t: float, g: float) -> String:
 func _build_body() -> void:
 	var ts := _t_list()
 	var ns := ts.size()
-	var secs: Array = []
 	var rings: Array = []
 	for t in ts:
-		var s := _sec(float(t))
-		secs.append(s)
-		var p: PackedVector2Array = s["p"]
-		var z: float = s["z"]
+		var sc := _sec(float(t))
+		var p: PackedVector2Array = sc["p"]
+		var z: float = sc["z"]
 		var ring := PackedVector3Array()
 		for i in HALF:
 			ring.append(Vector3(p[i].x, p[i].y, z))
@@ -365,18 +406,18 @@ func _build_body() -> void:
 			row.append(n.normalized() if n.length_squared() > 1e-14 else Vector3.ZERO)
 		qn.append(row)
 	# ориентация наружу: середина правой боковины должна смотреть в +X
-	var sign := -1.0 if qn[int(ns / 2)][5].x < 0.0 else 1.0
-	# «острые» машины (клин) — меньший угол сглаживания, грани видны
+	var probe := PRE + 2 * SPAN
+	var sign := -1.0 if qn[int(ns / 2)][probe].x < 0.0 else 1.0
 	var smooth_cos := cos(deg_to_rad(float(_b.get("smooth_deg", 40.0))))
 	for i in ns - 1:
 		var tm: float = (float(ts[i]) + float(ts[i + 1])) * 0.5
-		var gm: float = (float(secs[i]["g"]) + float(secs[i + 1]["g"])) * 0.5
 		for k in RING:
 			var fn: Vector3 = qn[i][k] * sign
 			if fn == Vector3.ZERO:
 				continue
-			var half_k := k if k < HALF - 1 else RING - 1 - k
-			var mat := _panel_mat(half_k, tm, gm)
+			var right := k < HALF - 1
+			var half_k := k if right else RING - 1 - k
+			var mat := _panel_mat(half_k, tm)
 			var k1 := (k + 1) % RING
 			var vs: Array = []
 			var nrm: Array = []
@@ -385,11 +426,10 @@ func _build_body() -> void:
 				var ii: int = cnr[0]
 				var j: int = cnr[1]
 				vs.append(rings[ii][j])
-				var v := float(j) / RING
-				if j == 0 and k == RING - 1:
-					v = 1.0
-				uvs.append(Vector2(float(ts[ii]), v))
-				# сглаживание: соседние грани вокруг вершины с близкой нормалью
+				# текстура швов: справа v = u/20, слева 1 - u/20
+				var jr := j if right else (RING - j) % RING
+				var u := _u_of(jr) / 20.0
+				uvs.append(Vector2(float(ts[ii]), u if right else 1.0 - u))
 				var nsum := Vector3.ZERO
 				for sec in [ii - 1, ii]:
 					if sec < 0 or sec >= ns - 1:
@@ -401,7 +441,7 @@ func _build_body() -> void:
 				nrm.append(nsum.normalized() if nsum.length_squared() > 1e-12 else fn)
 			_emit_tri(mat, [vs[0], vs[1], vs[2]], [nrm[0], nrm[1], nrm[2]], fn, [uvs[0], uvs[1], uvs[2]])
 			_emit_tri(mat, [vs[0], vs[2], vs[3]], [nrm[0], nrm[2], nrm[3]], fn, [uvs[0], uvs[2], uvs[3]])
-	# торцы: нос и корма
+	# торцы: нос и корма (у скруглённых машин они маленькие)
 	for end in [0, ns - 1]:
 		var ring: PackedVector3Array = rings[end]
 		var center := Vector3.ZERO
@@ -409,35 +449,31 @@ func _build_body() -> void:
 			center += q
 		center /= ring.size()
 		var fn := Vector3(0, 0, -1) if end == 0 else Vector3(0, 0, 1)
-		var tu := 0.0 if end == 0 else 1.0
 		for k in RING:
-			_emit_tri("paint", [center, ring[k], ring[(k + 1) % RING]], [fn, fn, fn], fn,
-				[PART_UV, Vector2(tu, float(k) / RING), Vector2(tu, float(k + 1) / RING)])
+			_emit_tri("paint", [center, ring[k], ring[(k + 1) % RING]], [fn, fn, fn], fn, [PART_UV, PART_UV, PART_UV])
 
 
 ## Текстура швов (оттенки серого, умножается на цвет краски).
-## u — вдоль машины (t), v — по кольцу: полоса 8 px на каждую панель.
+## u — вдоль машины (t), v — по сечению: полоса 8 px на каждый промежуток опорных
+## точек; справа полоса j, слева — 19 - j.
 func _detail_texture() -> ImageTexture:
 	var w := 512
-	var h := RING * 8
+	var h := 160
 	var img := Image.create(w, h, false, Image.FORMAT_RGB8)
 	img.fill(Color(1, 1, 1))
 	var shade := func(x0: int, x1: int, y0: int, y1: int, k: float):
 		for x in range(maxi(x0, 0), mini(x1, w)):
 			for y in range(maxi(y0, 0), mini(y1, h)):
 				img.set_pixel(x, y, img.get_pixel(x, y) * k)
-	# k — номер панели половины; справа полоса k, слева — RING-1-k
 	var both := func(t0: float, t1: float, k0: int, k1: int, f: float, y0 := 0, y1 := 8, right_only := false):
 		for k in range(k0, k1 + 1):
-			for band in ([k] if right_only else [k, RING - 1 - k]):
+			for band in ([k] if right_only else [k, 19 - k]):
 				shade.call(int(t0 * w), int(t1 * w) + 1, band * 8 + y0, band * 8 + y1, f)
-	both.call(0.0, 1.0, 3, 3, 0.8)           # тень порога
-	for s in _b.get("seams", []):
-		both.call(float(s[0]), float(s[0]), int(s[1]), int(s[2]), 0.42)
-	for s in _b.get("hlines", []):
-		both.call(float(s[0]), float(s[1]), int(s[2]), int(s[2]), 0.5, int(s[3]), int(s[3]) + 1)
-	for s in _b.get("handles", []):
-		both.call(float(s[0]) - 0.012, float(s[0]), int(s[1]), int(s[1]), 0.35, 2, 5)
+	both.call(0.0, 1.0, 1, 1, 0.8)           # тень порога
+	for sm in _b.get("seams", []):
+		both.call(float(sm[0]), float(sm[0]), int(sm[1]), int(sm[2]), 0.42)
+	for sm in _b.get("hlines", []):
+		both.call(float(sm[0]), float(sm[1]), int(sm[2]), int(sm[2]), 0.5, int(sm[3]), int(sm[3]) + 1)
 	if _b.has("fuel"):
 		var f: Array = _b["fuel"]
 		both.call(float(f[0]) - 0.012, float(f[0]), int(f[1]), int(f[1]), 0.6, 1, 7, true)
@@ -634,34 +670,38 @@ func _end_t(x: float, y: float, rear: bool) -> float:
 
 
 func _side_x(p: PackedVector2Array, y: float) -> float:
-	if y <= p[3].y:
-		return p[3].x
-	var top := 9 if p[9].y > p[8].y + 0.005 else 8
-	for i in range(3, top):
+	var i0 := _ci(1)
+	if y <= p[i0].y:
+		return p[i0].x
+	var top := _ci(7)
+	for i in range(i0, top):
 		if p[i + 1].y <= p[i].y:
-			return p[i].x
+			if y <= p[i].y + 0.03:
+				return p[i].x
+			continue
 		if y <= p[i + 1].y:
 			return lerpf(p[i].x, p[i + 1].x, (y - p[i].y) / (p[i + 1].y - p[i].y))
 	return p[top].x
 
 
 func _top_y(p: PackedVector2Array, x: float) -> float:
-	for i in range(HALF - 1, 7, -1):
+	for i in range(HALF - 1, _ci(5), -1):
 		var a := p[i]
 		var b := p[i - 1]
 		if x <= b.x:
 			return lerpf(a.y, b.y, (x - a.x) / maxf(b.x - a.x, 0.0001))
-	return p[7].y
+	return p[_ci(5)].y
 
 
 func _rel(d: Dictionary, t: float) -> float:
+	var c: Array = _sec(t)["c"]
 	match d.get("rel", ""):
 		"sh":
-			return float(_sec(t)["y_sh"])
+			return (c[6] as Vector2).y
 		"lo":
-			return float(_sec(t)["yb"])
+			return (c[0] as Vector2).y
 		"zh":
-			return float(_sec(t)["y_zh"])
+			return (c[4] as Vector2).y
 	return 0.0
 
 
@@ -679,13 +719,15 @@ func _proj(d: Dictionary, a: float, b: float, s: float) -> Array:
 		"front", "rear":
 			var rear := view == "rear"
 			var t := _end_t(a, b, rear)
-			return [Vector3(a * s, b, -_L * 0.5 + t * _L), Vector3(0, 0, 1 if rear else -1)]
+			# точка далеко от торца — наклейка не помещается на нос/корму, такие куски отбрасываем
+			var far := (1.0 - t if rear else t) > float(d.get("depth_max", 0.12))
+			return [Vector3(a * s, b, -_L * 0.5 + t * _L), Vector3(0, 0, 1 if rear else -1), far]
 	# surf: (t, u)
 	var q := _surf(a, b, s)
 	var e1 := _surf(minf(a + 0.004, 1.0), b, s) - _surf(maxf(a - 0.004, 0.0), b, s)
 	var e2 := _surf(a, b + 0.05, s) - _surf(a, b - 0.05, s)
 	var n := e1.cross(e2).normalized()
-	if n.dot(Vector3(q.x, q.y - 0.6, 0)) < 0.0:
+	if n.dot(Vector3(q.x, q.y - 0.5, 0)) < 0.0:
 		n = -n
 	return [q, n]
 
@@ -776,7 +818,7 @@ func _pn(d: Dictionary, q: Vector2, s: float) -> Array:
 	n = n.normalized() if n.length_squared() > 1e-14 else (pr[1] as Vector3)
 	if n.dot(pr[1]) < 0.0:
 		n = -n
-	return [pr[0], n, pr[1]]
+	return [pr[0], n, pr[1], pr.size() > 2 and pr[2]]
 
 
 ## Насколько поверхность смотрит на зрителя вида: подъём деталей на скруглённых
@@ -820,6 +862,8 @@ func _walls(d: Dictionary, s: float, pts: PackedVector2Array, unit: Vector2, res
 			var p1 := a.lerp(b, float(k + 1) / steps)
 			var A: Array = pn.call(p0)
 			var B: Array = pn.call(p1)
+			if A[3] or B[3]:
+				continue
 			var a3: Vector3 = A[0]
 			var b3: Vector3 = B[0]
 			var an: Vector3 = A[1]
@@ -914,8 +958,10 @@ func _project(pieces: Array, d: Dictionary, s: float, mat: String, lift: float, 
 				var key := Vector2i(roundi(q.x * 100000.0), roundi(q.y * 100000.0))
 				if not cache.has(key):
 					var pr := _proj(d, q.x, q.y, s)
-					cache[key] = [pr[0], pr[1], q]
+					cache[key] = [pr[0], pr[1], q, pr.size() > 2 and pr[2]]
 				tri.append(key)
+			if cache[tri[0]][3] or cache[tri[1]][3] or cache[tri[2]][3]:
+				continue
 			var a: Vector3 = cache[tri[0]][0]
 			var b: Vector3 = cache[tri[1]][0]
 			var c: Vector3 = cache[tri[2]][0]
@@ -1053,6 +1099,14 @@ func _setup(def: Dictionary) -> void:
 	_L = def["len"]
 	_W = def["wid"]
 	_c = float(_b["clear"])
+	# каркас: кривые вдоль машины для низа и каждой координаты опорных точек
+	_net = []
+	for k in NCTL * 2 + 1:
+		var pts := []
+		for st in _b["net"]:
+			pts.append([float(st[0]), float(st[1 + k])])
+		_net.append(pts)
+	_crease = _b.get("crease", [])
 	_wr = _b["wr"]
 	_tire = _b["tire"]
 	var axles: Array = _b["axles"]
@@ -1104,8 +1158,8 @@ func _build_parts() -> void:
 func _mirror(p: Dictionary) -> void:
 	var t: float = p["t"]
 	var s := _sec(t)
-	var pts: PackedVector2Array = s["p"]
-	var base := Vector3(pts[8].x, pts[8].y + float(p.get("dy", 0.04)), float(s["z"]))
+	var belt: Vector2 = (s["c"] as Array)[6]
+	var base := Vector3(belt.x, belt.y + float(p.get("dy", 0.04)), float(s["z"]))
 	var out: float = p.get("out", 0.13)
 	var mw: float = p.get("w", 0.2)
 	var mh: float = p.get("h", 0.1)
@@ -1134,7 +1188,7 @@ func _mirror(p: Dictionary) -> void:
 func _splitter(depth: float, width: float, mat: String, dy := 0.0) -> void:
 	var s := _sec(0.02)
 	var y: float = float(s["yb"]) - 0.01 + dy
-	var w: float = float((s["p"] as PackedVector2Array)[3].x) * 2.0 * width
+	var w: float = ((s["c"] as Array)[2] as Vector2).x * 2.0 * width
 	var z := -_L * 0.5
 	var poly := PackedVector2Array([Vector2(-w * 0.5, z + 0.12), Vector2(w * 0.5, z + 0.12), Vector2(w * 0.47, z - depth),
 		Vector2(-w * 0.47, z - depth)])
@@ -1158,7 +1212,7 @@ func _wipers() -> void:
 	var ws: Array = _b["ws"]
 	var t: float = float(ws[0]) + 0.012
 	var s := _sec(t)
-	var y: float = float((s["p"] as PackedVector2Array)[11].y) + 0.012
+	var y: float = ((s["c"] as Array)[9] as Vector2).y + 0.012
 	var z: float = s["z"]
 	for x: float in [-0.42, 0.12]:
 		var a := Vector3(x, y, z)
@@ -1170,7 +1224,7 @@ func _wipers() -> void:
 
 func _antenna(t: float) -> void:
 	var s := _sec(t)
-	var y: float = (s["p"] as PackedVector2Array)[11].y
+	var y: float = ((s["c"] as Array)[9] as Vector2).y
 	var z: float = s["z"]
 	var poly := PackedVector2Array([Vector2(z - 0.08, y - 0.01), Vector2(z + 0.1, y - 0.01), Vector2(z + 0.07, y + 0.06)])
 	_prism("trim", poly, -0.025, 0.025, 0)
@@ -1183,8 +1237,8 @@ func _snorkel(p: Dictionary) -> void:
 	var w: float = p.get("w", 0.22)
 	var s0 := _sec(t0)
 	var s1 := _sec(t1)
-	var y0: float = (s0["p"] as PackedVector2Array)[11].y
-	var y1: float = (s1["p"] as PackedVector2Array)[11].y
+	var y0: float = ((s0["c"] as Array)[9] as Vector2).y
+	var y1: float = ((s1["c"] as Array)[9] as Vector2).y
 	var z0: float = s0["z"]
 	var z1: float = s1["z"]
 	var prof := PackedVector2Array([Vector2(z0, y0 - 0.02), Vector2(z1, y1 - 0.02), Vector2(z1, y1 + 0.02), Vector2(z0 + 0.06, y0 + hgt),
@@ -1228,12 +1282,12 @@ func _exhaust(e: Dictionary, sd: float) -> void:
 func _wing(w: Dictionary) -> void:
 	var t: float = w["t"]
 	var s := _sec(t)
-	var deck: float = (s["p"] as PackedVector2Array)[11].y
+	var deck: float = ((s["c"] as Array)[9] as Vector2).y
 	var z: float = s["z"]
 	var kind: String = w.get("type", "wing")
 	var mat: String = w.get("m", "dark")
 	if kind == "lip":
-		var ww: float = float((s["p"] as PackedVector2Array)[7].x) * 2.0 * float(w.get("span", 0.9))
+		var ww: float = ((s["c"] as Array)[6] as Vector2).x * 2.0 * float(w.get("span", 0.9))
 		var hh: float = w.get("h", 0.05)
 		var lip := PackedVector2Array([Vector2(z - 0.16, deck - 0.01), Vector2(z + 0.04, deck - 0.01), Vector2(z + 0.06, deck + hh)])
 		_prism(mat, lip, -ww * 0.5, ww * 0.5, 0)
@@ -1304,7 +1358,7 @@ func _build_tuning() -> void:
 		var z0: float = float(_axle_z[0]) + float(_wr[0]) + 0.1
 		var z1: float = float(_axle_z[1]) - float(_wr[1]) - 0.1
 		var sm := _sec((float(axles[0]) + float(axles[1])) * 0.5)
-		var x: float = (sm["p"] as PackedVector2Array)[3].x
+		var x: float = ((sm["c"] as Array)[2] as Vector2).x
 		var yb: float = sm["yb"]
 		var prof := PackedVector2Array([Vector2(z0, yb - 0.025), Vector2(z1, yb - 0.025), Vector2(z1, yb + 0.06), Vector2(z0, yb + 0.06)])
 		for sd: float in [1.0, -1.0]:
@@ -1322,8 +1376,8 @@ func _build_tuning() -> void:
 			var pts := []
 			for i in 9:
 				var t := lerpf(0.035, t1, float(i) / 8.0)
-				var p: PackedVector2Array = _sec(t)["p"]
-				pts.append([p[8].x * 0.97, t])
+				var ce: Vector2 = (_sec(t)["c"] as Array)[6]
+				pts.append([ce.x * 0.9, t])
 			for i in range(8, -1, -1):
 				pts.append([0.0, lerpf(0.035, t1, float(i) / 8.0)])
 			_decal({"v": "top", "m": carbon, "p": pts, "res": 0.12, "lift": 0.008})
@@ -1349,7 +1403,7 @@ func _build_wheels(def: Dictionary) -> void:
 			_wheel_cache[key] = _wheel_mesh(r, tw, rim_type)
 		var wm: Dictionary = _wheel_cache[key]
 		var s := _sec(float(axles[i]))
-		var outer: float = (s["p"] as PackedVector2Array)[3].x - 0.015
+		var outer: float = minf(((s["c"] as Array)[2] as Vector2).x, ((s["c"] as Array)[3] as Vector2).x) - 0.015
 		for sd: float in [1.0, -1.0]:
 			var pivot := Node3D.new()
 			pivot.position = Vector3(sd * (outer - tw * 0.5), r, float(_axle_z[i]))
