@@ -21,6 +21,9 @@ func _ready() -> void:
 	main.show_menu("race")
 	await _wait(5)
 	await _shot("menu_race")
+	main.show_menu("settings")
+	await _wait(5)
+	await _shot("menu_settings")
 	main.show_menu("mp")
 	await _wait(5)
 	await _shot("menu_mp")
@@ -54,6 +57,14 @@ func _ready() -> void:
 			cam.queue_free()
 		await _wait(60 * 5)
 		await _shot("race_" + id)
+		if id == "valley":
+			race.hud.toggle_pause()
+			await _wait(5)
+			await _shot("pause")
+			race.hud._open_settings()
+			await _wait(5)
+			await _shot("pause_settings")
+			race.hud._resume()
 	get_tree().quit()
 
 

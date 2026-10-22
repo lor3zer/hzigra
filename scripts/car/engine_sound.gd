@@ -157,14 +157,15 @@ func _process(dt: float) -> void:
 		if throttle_now > 0.5:
 			target = clampf((rpm / redline - 0.25) / 0.45, 0.0, 1.0)
 		_boost = move_toward(_boost, target, dt * (1.1 if target > _boost else 5.0))
-		_turbo.volume_db = _db(_boost * 0.3)
-		_turbo.pitch_scale = 0.55 + 0.6 * _boost
+		# турбина — фоном, под мотором: громкий свист быстро утомляет
+		_turbo.volume_db = _db(_boost * 0.11)
+		_turbo.pitch_scale = 0.7 + 0.35 * _boost
 
 	# сброс газа: клапан и выстрелы в выхлоп
 	if _prev_throttle > 0.6 and throttle_now < 0.2 and rpm > redline * 0.5:
 		if bool(e["turbo"]) and local and _boost > 0.3:
 			var flutter: bool = car.def.get("engine", "") in ["i4t", "i6t"]
-			shot("flutter" if flutter else "bov", 0.4 + 0.5 * _boost, randf_range(0.95, 1.1))
+			shot("flutter" if flutter else "bov", 0.2 + 0.3 * _boost, randf_range(0.95, 1.1))
 		if bool(e["pops"]):
 			for i in randi_range(2, 5):
 				_pops.append(_t + randf_range(0.05, 0.9))

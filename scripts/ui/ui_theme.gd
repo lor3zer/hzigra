@@ -69,3 +69,23 @@ static func button(text: String, cb: Callable, min_size := Vector2(0, 64)) -> Bu
 	b.custom_minimum_size = min_size
 	b.pressed.connect(cb)
 	return b
+
+
+## Строка выбора «название  <  значение  >».
+static func selector(parent: Control, title: String, options: Array, idx: int, cb: Callable, label_w := 250.0) -> void:
+	var row := HBoxContainer.new()
+	parent.add_child(row)
+	var l := label(title, 26)
+	l.custom_minimum_size.x = label_w
+	row.add_child(l)
+	var state := {"i": clampi(idx, 0, options.size() - 1)}
+	var val := label(str(options[state["i"]]), 26, Color(1, 0.92, 0.5))
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	val.custom_minimum_size.x = 300
+	var step := func(d: int):
+		state["i"] = posmod(state["i"] + d, options.size())
+		val.text = str(options[state["i"]])
+		cb.call(state["i"])
+	row.add_child(button("<", step.bind(-1), Vector2(70, 56)))
+	row.add_child(val)
+	row.add_child(button(">", step.bind(1), Vector2(70, 56)))

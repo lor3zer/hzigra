@@ -240,7 +240,41 @@ func _open_pause() -> void:
 		_resume()
 		race.respawn_player()
 	vb.add_child(UITheme.button("Вернуть на трассу", back_on_track))
+	vb.add_child(UITheme.button("Настройки", _open_settings))
 	vb.add_child(UITheme.button("Выйти из сети" if race.net else "В меню", race.quit_to_menu))
+	vb.add_child(MusicWidget.new())
+
+
+## Настройки прямо в гонке: изменения применяются сразу.
+func _open_settings() -> void:
+	var vb := _make_overlay("Настройки")
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(760, 400)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(box)
+	SettingsPanel.build(box, true, _apply_setting, func(t: String): flash(t))
+	var back := func():
+		Game.save_settings()
+		_open_pause()
+	vb.add_child(UITheme.button("Назад", back))
+
+
+func _apply_setting(key: String) -> void:
+	var s: Dictionary = Game.settings
+	match key:
+		"steering":
+			touch.show_steer = int(s["steering"]) == 0
+			touch.queue_redraw()
+		"camera":
+			race.cam_mode = int(s["camera"])
+		"shadows":
+			if race.track and race.track.sun:
+				race.track.sun.shadow_enabled = bool(s["shadows"]) and int(race.config["tod"]) != 2
+		"show_fps":
+			_fps_label.visible = bool(s["show_fps"])
 
 
 func _resume() -> void:

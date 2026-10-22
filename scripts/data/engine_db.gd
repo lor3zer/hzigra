@@ -15,5 +15,5 @@ const ENGINES := {
 	"v10": {"name": "V10", "lo_rpm": 3200.0, "hi_rpm": 8600.0, "off_rpm": 5200.0, "idle": 1000.0, "redline": 9000.0, "gears": 7, "turbo": false, "pops": true},
 	"v12": {"name": "V12", "lo_rpm": 3200.0, "hi_rpm": 8800.0, "off_rpm": 5400.0, "idle": 1000.0, "redline": 9300.0, "gears": 7, "turbo": false, "pops": false},
 	"w16": {"name": "W16, четыре турбины", "lo_rpm": 2200.0, "hi_rpm": 6400.0, "off_rpm": 3800.0, "idle": 750.0, "redline": 7000.0, "gears": 7, "turbo": true, "pops": false},
-	"ev": {"name": "Электро", "lo_rpm": 3000.0, "hi_rpm": 10000.0, "off_rpm": 6000.0, "idle": 0.0, "redline": 14000.0, "gears": 1, "turbo": false, "pops": false},
+	"ev": {"name": "Электромоторы", "lo_rpm": 3000.0, "hi_rpm": 8972.0, "off_rpm": 6000.0, "idle": 0.0, "redline": 12000.0, "gears": 1, "turbo": false, "pops": false},
 }

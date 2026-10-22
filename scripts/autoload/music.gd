@@ -9,6 +9,7 @@ var player: AudioStreamPlayer
 var tracks: Array[String] = []
 var _order: Array = []
 var _idx := -1
+var _history: Array = []
 
 
 func _ready() -> void:
@@ -29,19 +30,58 @@ func _ready() -> void:
 func next() -> void:
 	if tracks.is_empty() or player == null:
 		return
+	if _idx >= 0:
+		_history.append(_idx)
+		if _history.size() > 20:
+			_history.pop_front()
 	if _order.is_empty():
 		_order = range(tracks.size())
 		_order.shuffle()
 		# не повторяем только что игравший трек
 		if _order.size() > 1 and _order[0] == _idx:
 			_order.push_back(_order.pop_front())
-	_idx = _order.pop_front()
+	_play(_order.pop_front())
+
+
+## Назад: в начале трека — предыдущий трек, иначе — к началу текущего.
+func prev() -> void:
+	if player == null or _idx < 0:
+		return
+	if player.get_playback_position() > 3.0 or _history.is_empty():
+		player.play()
+		player.stream_paused = false
+		return
+	_order.push_front(_idx)
+	_play(_history.pop_back())
+
+
+func _play(i: int) -> void:
+	_idx = i
 	var s: AudioStream = load(tracks[_idx])
 	if s is AudioStreamOggVorbis:
 		s.loop = false
 	player.stream = s
 	player.play()
+	player.stream_paused = false
 	track_changed.emit(title())
+
+
+func toggle_pause() -> void:
+	if player and player.stream:
+		player.stream_paused = not player.stream_paused
+
+
+func is_paused() -> bool:
+	return player != null and player.stream_paused
+
+
+## Позиция и длина текущего трека, секунды.
+func position() -> float:
+	return player.get_playback_position() if player and player.playing else 0.0
+
+
+func length() -> float:
+	return player.stream.get_length() if player and player.stream else 0.0
 
 
 func title() -> String:

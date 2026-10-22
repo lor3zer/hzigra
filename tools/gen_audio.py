@@ -39,7 +39,7 @@ ALIASES = {
     "v8tt": dict(base="v8x", name="V8 битурбо (кросс-плейн)", idle=700, redline=6800, gears=6, turbo=True, pops=True),
 }
 
-EV = dict(name="Электро", lo=3000, hi=10000, off=6000, idle=0, redline=14000, gears=1, turbo=False, pops=False)
+EV = dict(name="Электромоторы", lo=3000, hi=9000, off=6000, idle=0, redline=12000, gears=1, turbo=False, pops=False)
 
 
 # ---------------------------------------------------------------- утилиты
@@ -95,33 +95,42 @@ def env_exp(n, tau):
 # ---------------------------------------------------------------- мотор
 
 def ev_loop(rpm, load, seconds=1.0):
+    """Электромотор: низкий гул с быстро спадающими гармониками, тихий вой
+    редуктора и шелест. Без резкого свиста инвертора — он утомляет."""
     f0 = rpm / 60.0 * 2.0                            # 2 пары полюсов
     period = int(round(SR / f0))
     real_rpm = SR / period * 60.0 / 2.0
-    n = period * max(8, int(round(seconds * SR / period)))
+    k = max(8, int(round(seconds * SR / period)))
+    n = period * (k + k % 2)                         # чётное число периодов: субгармоника тоже замкнётся
     t = np.arange(n) / SR
     f = SR / period
     y = np.zeros(n)
-    for h, a in [(1, 1.0), (2, 0.45), (3, 0.3), (4, 0.18), (6, 0.12), (8, 0.08)]:
+    for h, a in [(1, 1.0), (2, 0.4), (3, 0.16), (4, 0.07)]:
         y += a * np.sin(2 * np.pi * f * h * t + h)
-    y += 0.25 * np.sin(2 * np.pi * f * 0.5 * t)       # гул редуктора
-    y += 0.12 * np.sign(np.sin(2 * np.pi * f * 12 * t)) * 0.3  # свист инвертора
-    hiss = periodic(lambda x: bp(x, 2500, 9000, 2), n)(rng.normal(0, 1, n))
-    y = y / np.std(y) + hiss / np.std(hiss) * 0.15
+    y += 0.55 * np.sin(2 * np.pi * f * 0.5 * t)       # гул редуктора
+    y += 0.05 * np.sin(2 * np.pi * f * 7 * t)         # вой шестерён, тихо
+    rumble = periodic(lambda x: bp(x, 60, 400, 2), n)(rng.normal(0, 1, n))
+    hiss = periodic(lambda x: bp(x, 400, 2500, 2), n)(rng.normal(0, 1, n))
+    y = y / np.std(y) + rumble / np.std(rumble) * 0.35 + hiss / np.std(hiss) * 0.08
+    y = periodic(lambda x: lp(x, 3000, 2), n)(y)
     if load < 0.5:
-        y = periodic(lambda x: lp(x, 2500, 2), n)(y) * 0.6
+        y = periodic(lambda x: lp(x, 1500, 2), n)(y) * 0.6
     return y, real_rpm
 
 
 # ---------------------------------------------------------------- прочие звуки
 
 def turbo_loop():
+    """Турбина: в основном поток воздуха, тон свиста ниже и тише (раньше был
+    чистый синус 3.2 кГц — самая «режущая» для слуха частота)."""
     n = int(SR * 1.0)
     t = np.arange(n) / SR
-    f = 3200.0
-    y = np.sin(2 * np.pi * f * t) + 0.35 * np.sin(2 * np.pi * f * 2 * t) + 0.2 * np.sin(2 * np.pi * f * 1.5 * t)
-    hiss = periodic(lambda x: bp(x, 3000, 9000, 2), n)(rng.normal(0, 1, n))
-    return y / np.std(y) + hiss / np.std(hiss) * 0.6
+    f = 1700.0                                        # целое число периодов за секунду — шов незаметен
+    phase = 2 * np.pi * f * t + 2.0 * np.sin(2 * np.pi * 3 * t)   # лёгкое «плавание» тона, цикл замкнут
+    tone = np.sin(phase) + 0.25 * np.sin(2 * phase)
+    air = periodic(lambda x: bp(x, 700, 3200, 2), n)(rng.normal(0, 1, n))
+    y = tone / np.std(tone) * 0.3 + air / np.std(air)
+    return periodic(lambda x: lp(x, 5000, 2), n)(y)
 
 
 def blowoff(flutter=False):

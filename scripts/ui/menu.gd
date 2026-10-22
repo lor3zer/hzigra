@@ -141,22 +141,7 @@ func _set_title(t: String, sub := "") -> void:
 # ---------------------------------------------------------------- виджеты
 
 func _selector(parent: Control, title: String, options: Array, idx: int, cb: Callable) -> void:
-	var row := HBoxContainer.new()
-	parent.add_child(row)
-	var l := UITheme.label(title, 26)
-	l.custom_minimum_size.x = 250
-	row.add_child(l)
-	var state := {"i": clampi(idx, 0, options.size() - 1)}
-	var val := UITheme.label(str(options[state["i"]]), 26, Color(1, 0.92, 0.5))
-	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	val.custom_minimum_size.x = 300
-	var step := func(d: int):
-		state["i"] = posmod(state["i"] + d, options.size())
-		val.text = str(options[state["i"]])
-		cb.call(state["i"])
-	row.add_child(UITheme.button("<", step.bind(-1), Vector2(70, 56)))
-	row.add_child(val)
-	row.add_child(UITheme.button(">", step.bind(1), Vector2(70, 56)))
+	UITheme.selector(parent, title, options, idx, cb)
 
 
 func _bottom_bar() -> HBoxContainer:
@@ -304,6 +289,9 @@ func _main() -> void:
 	var pl := UITheme.label("Пилот: %s" % Game.settings["player_name"], 22, Color(0.7, 0.75, 0.85))
 	pl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	right.add_child(pl)
+	var mw := MusicWidget.new()
+	mw.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	right.add_child(mw)
 
 
 func _record_text(track_id: String, reverse: bool) -> String:
@@ -476,8 +464,8 @@ func _update_garage() -> void:
 	_garage_info.add_child(grid)
 	var t100 := CarDB.zero_to_100(c)
 	var stats := [
-		["Скорость", "%d км/ч" % int(c["top"]), (c["top"] - 250.0) / 120.0],
-		["0-100", "%.1f с" % t100, (4.6 - t100) / 2.0],
+		["Скорость", "%d км/ч" % int(c["top"]), (c["top"] - 250.0) / 250.0],
+		["0-100", "%.1f с" % t100, (4.4 - t100) / 2.4],
 		["Управление", "%.2f" % c["handling"], (c["handling"] - 1.3) / 0.7],
 		["Сцепление", "%.2f g" % c["grip"], (c["grip"] - 1.6) / 1.1],
 	]
@@ -548,58 +536,13 @@ func _tuning_panel() -> void:
 
 
 func _settings() -> void:
-	_set_title("Настройки")
-	var s: Dictionary = Game.settings
+	_set_title("Настройки", "  то же можно менять на паузе прямо в гонке")
 	var vb := _scroll_box()
-	var row := HBoxContainer.new()
-	vb.add_child(row)
-	var nl := UITheme.label("Имя пилота", 26)
-	nl.custom_minimum_size.x = 250
-	row.add_child(nl)
-	var name_edit := LineEdit.new()
-	name_edit.text = s["player_name"]
-	name_edit.max_length = 16
-	name_edit.custom_minimum_size = Vector2(440, 56)
-	name_edit.text_changed.connect(func(t): s["player_name"] = t.strip_edges() if t.strip_edges() != "" else "Игрок")
-	row.add_child(name_edit)
-	_selector(vb, "Руль", ["Кнопки", "Наклон телефона"], int(s["steering"]), func(i): s["steering"] = i)
-	var sens := [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-	var sens_names := sens.map(func(v): return "x%.2f" % v)
-	_selector(vb, "Чувствит. наклона", sens_names, maxi(0, sens.find(float(s["tilt_sens"]))), func(i): s["tilt_sens"] = sens[i])
-	_selector(vb, "Инверсия наклона", ["Нет", "Да"], 1 if s["tilt_invert"] else 0, func(i): s["tilt_invert"] = i == 1)
-	var calib := func():
-		Game.tilt_zero = Input.get_accelerometer().x
-		toast("Нулевое положение сохранено")
-	vb.add_child(UITheme.button("Откалибровать наклон (держите телефон ровно)", calib, Vector2(0, 56)))
-	_selector(vb, "Камера", ["Ближняя", "Дальняя", "С капота"], int(s["camera"]), func(i): s["camera"] = i)
-	_selector(vb, "Тени", ["Выкл", "Вкл"], 1 if s["shadows"] else 0, func(i): s["shadows"] = i == 1)
-	_selector(vb, "Звук", ["Выкл", "Вкл"], 1 if s["sound"] else 0, func(i):
-		s["sound"] = i == 1
-		Game.apply_audio())
-	var vols := [0.2, 0.4, 0.6, 0.8, 1.0]
-	var vol_names := vols.map(func(v): return "%d%%" % int(v * 100))
-	var vi := 0
-	for k in vols.size():
-		if absf(float(vols[k]) - float(s["volume"])) < 0.05:
-			vi = k
-	_selector(vb, "Громкость звуков", vol_names, vi, func(i):
-		s["volume"] = vols[i]
-		Game.apply_audio())
-	var mvols := [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-	var mnames := mvols.map(func(v): return "Выкл" if v == 0.0 else "%d%%" % int(v * 100))
-	var mi := 0
-	for k in mvols.size():
-		if absf(float(mvols[k]) - float(s["music"])) < 0.05:
-			mi = k
-	_selector(vb, "Музыка", mnames, mi, func(i):
-		s["music"] = mvols[i]
-		Game.apply_audio())
-	var skip := func():
-		Music.next()
-		toast("Сейчас играет: " + Music.title())
-	vb.add_child(UITheme.button("Следующий трек", skip, Vector2(0, 56)))
-	_selector(vb, "Показывать FPS", ["Нет", "Да"], 1 if s["show_fps"] else 0, func(i): s["show_fps"] = i == 1)
+	SettingsPanel.build(vb, false, func(_key: String): pass, toast)
 	var bar := _bottom_bar()
+	var mw := MusicWidget.new()
+	mw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.add_child(mw)
 	var back := func():
 		Game.save_settings()
 		open("main")
