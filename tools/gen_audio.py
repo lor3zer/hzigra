@@ -30,7 +30,7 @@ ENGINES = {
     "v8f": dict(name="V8 битурбо (флэт-плейн)", idle=950, redline=8600, gears=7, turbo=True, pops=True),
     "i6t": dict(name="Рядная 6, битурбо", idle=850, redline=7600, gears=6, turbo=True, pops=True),
     "v10": dict(name="V10", idle=1000, redline=9000, gears=7, turbo=False, pops=True),
-    "v12": dict(name="V12", idle=1000, redline=9300, gears=7, turbo=False, pops=False),
+    "v12": dict(name="V12", idle=1000, redline=9300, gears=7, turbo=False, pops=True),
     "w16": dict(name="W16, четыре турбины", idle=750, redline=7000, gears=7, turbo=True, pops=False),
 }
 
@@ -146,31 +146,53 @@ def blowoff(flutter=False):
 
 
 def pop(kind):
-    n = int(SR * 0.35)
-    t = np.arange(n) / SR
+    """Выстрел в выхлоп — маленький взрыв: резкий треск (ударная волна, доли мс),
+    низкий «бух» резонанса выхлопной системы и потрескивание остывающих газов.
+    0 — одиночный, 1 — двойной, 2 — очередь мелких, 3 — крупный, 4 — треск."""
+    n = int(SR * 0.6)
     y = np.zeros(n)
-    shots = {0: [0.0], 1: [0.0, 0.07], 2: [0.0, 0.05, 0.11, 0.2]}[kind]
-    for s in shots:
-        i = int(s * SR)
+    shots = {0: [(0.0, 1.0)], 1: [(0.0, 1.0), (0.085, 0.7)],
+             2: [(0.0, 0.7), (0.06, 0.5), (0.13, 0.65), (0.21, 0.45), (0.3, 0.35)],
+             3: [(0.0, 1.0)], 4: [(0.0, 0.5), (0.04, 0.35), (0.09, 0.4)]}[kind]
+    big = kind == 3
+    for t0, a in shots:
+        i = int(t0 * SR)
         L = n - i
         tt = np.arange(L) / SR
-        a = rng.uniform(0.6, 1.0)
-        bang = rng.normal(0, 1, L) * np.exp(-tt / 0.012) + 1.6 * np.sin(2 * np.pi * 85 * tt) * np.exp(-tt / 0.035)
-        y[i:] += a * bang
-    y = np.tanh(lp(y, 4000, 2) * 2.5)
-    return y
+        # треск: N-волна (производная гауссианы) + короткий шумовой всплеск
+        w = 0.00035 if not big else 0.0005
+        nwave = -(tt - 3 * w) / w * np.exp(-((tt - 3 * w) / w) ** 2 / 2)
+        burst = hp(rng.normal(0, 1, L), 1500, 2) * np.exp(-tt / 0.003)
+        # «бух»: затухающий резонанс с лёгким падением частоты
+        f0 = rng.uniform(70, 95) * (0.8 if big else 1.0)
+        f = f0 * (1 + 0.5 * np.exp(-tt / 0.02))
+        boom = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-tt / (0.11 if big else 0.07))
+        boom += 0.4 * np.sin(2 * np.pi * np.cumsum(f * 2.3) / SR) * np.exp(-tt / 0.035)
+        body = lp(rng.normal(0, 1, L), 600, 2) * np.exp(-tt / 0.03) * 0.8
+        y[i:] += a * (1.6 * nwave + 0.9 * burst + (1.6 if big else 1.2) * boom + body)
+    # потрескивание: редкие щелчки, затихающие
+    tail = np.zeros(n)
+    k = 6 if kind != 4 else 18
+    for _ in range(k):
+        j = int(rng.uniform(0.02, 0.45 if kind != 4 else 0.5) * SR)
+        m = min(n - j, int(0.004 * SR))
+        tail[j:j + m] += rng.normal(0, 1, m) * np.exp(-np.arange(m) / (0.0008 * SR)) * rng.uniform(0.2, 0.6)
+    y += bp(tail, 1200, 7000, 2) * (0.6 if kind != 4 else 1.2)
+    y *= np.minimum(1.0, (n - np.arange(n)) / (0.05 * SR))   # плавный конец
+    return np.tanh(y * 1.2)
 
 
 def screech_loop():
-    n = int(SR * 2.0)
-    t = np.arange(n) / SR
-    wob = 40 * np.sin(2 * np.pi * 3 * t / 1.0 * 1) + 25 * np.sin(2 * np.pi * 7 * t)
-    phase = 2 * np.pi * np.cumsum(1050 + wob) / SR
-    # фаза должна замкнуться: подгоняем частоту
-    phase *= np.round(phase[-1] / (2 * np.pi)) * 2 * np.pi / phase[-1]
-    y = np.sin(phase) + 0.5 * np.sin(1.5 * phase) + 0.3 * np.sin(2 * phase)
-    noise = periodic(lambda x: bp(x, 700, 2600, 2), n)(rng.normal(0, 1, n))
-    return y / np.std(y) + noise / np.std(noise) * 0.7
+    """Визг шин: узкополосный шум около 1 кГц с неровной, «живой» огибающей
+    и тихий скрежет резины по асфальту. Без чистого тона — он раздражал."""
+    n = int(SR * 3.0)
+    squeal = periodic(lambda x: bp(x, 850, 1350, 2), n)(rng.normal(0, 1, n))
+    squeal2 = periodic(lambda x: bp(x, 1700, 2300, 2), n)(rng.normal(0, 1, n))
+    scrub = periodic(lambda x: bp(x, 150, 700, 2), n)(rng.normal(0, 1, n))
+    env = periodic(lambda x: lp(x, 6, 2), n)(rng.normal(0, 1, n))
+    env = 0.6 + 0.4 * env / (np.max(np.abs(env)) + 1e-9)
+    y = squeal / np.std(squeal) * env + squeal2 / np.std(squeal2) * 0.3 * env + scrub / np.std(scrub) * 0.5
+    return periodic(lambda x: lp(x, 4000, 2), n)(y)
 
 
 def wind_loop():
@@ -369,7 +391,7 @@ def main():
     write_wav("turbo.wav", turbo_loop(), rms=0.2)
     write_wav("bov.wav", blowoff(False))
     write_wav("flutter.wav", blowoff(True))
-    for k in range(3):
+    for k in range(5):
         write_wav(f"pop{k}.wav", pop(k))
     write_wav("screech.wav", screech_loop(), rms=0.22)
     write_wav("wind.wav", wind_loop(), rms=0.2)

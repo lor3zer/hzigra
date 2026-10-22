@@ -210,7 +210,7 @@ func simulate(dt: float, time: float, frozen: bool) -> void:
 	lat_acc = yaw_rate * vf
 	slip = clampf((absf(lat_acc) / a_lat_max - 0.8) * 4.0, 0.0, 1.0)
 	if in_brake > 0.6 and vf > 18.0:
-		slip = maxf(slip, 0.55 * in_brake)
+		slip = maxf(slip, 0.4 * in_brake)
 	if offroad:
 		slip = 0.0
 	lon_acc = (vf - vf0) / maxf(dt, 0.001)

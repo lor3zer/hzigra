@@ -13,7 +13,6 @@ extends Node3D
 
 const HALF := 12            # точек в половине сечения (P0 — низ по центру, P11 — верх по центру)
 const RING := 22            # точек в полном кольце
-const SMOOTH_COS := 0.76    # сглаживать нормали между гранями, если угол меньше ~40°
 const PART_UV := Vector2(0.5, 0.01)   # место текстуры деталей без швов (для навесных деталей)
 
 ## Тюнинг: одинаковый набор для всех машин (0 — заводской вариант).
@@ -72,6 +71,7 @@ var _tire: Array = [0.26, 0.3]
 var _axle_z: Array = [0.0, 0.0]
 var _tune: Dictionary = {}
 var _tools := {}
+var _detail := false        # пишем в меш мелких деталей (скрывается вдали)
 var _sec_cache := {}
 var _fine_front: Array = []
 var _fine_rear: Array = []
@@ -218,11 +218,19 @@ func _sec(t: float) -> Dictionary:
 	var w := hw * _cv("w", t)
 	var yb := _c + _cv("lo", t)
 	var ya := yb
+	var hex: bool = _b.get("arch", "round") == "hex"
 	for i in 2:
 		var dz: float = z - float(_axle_z[i])
 		var ra: float = float(_wr[i]) + 0.06
 		if absf(dz) < ra:
-			ya = maxf(ya, float(_wr[i]) + sqrt(ra * ra - dz * dz) - 0.01)
+			var up: float
+			if hex:
+				# угловатая арка: плоский верх и скошенные бока
+				var f := absf(dz) / ra
+				up = ra * (0.97 if f < 0.5 else lerpf(0.97, 0.3, (f - 0.5) / 0.5))
+			else:
+				up = sqrt(ra * ra - dz * dz)
+			ya = maxf(ya, float(_wr[i]) + up - 0.01)
 	var y_zh := maxf(_cv("zh", t), ya + 0.05)
 	var y_sh := maxf(_cv("sh", t), y_zh + 0.04)
 	var y_top := _cv("top", t)
@@ -238,9 +246,11 @@ func _sec(t: float) -> Dictionary:
 	p[1] = Vector2(wi, yb)
 	p[2] = Vector2(wi, ya)
 	p[3] = Vector2(w * 0.955, ya)
-	p[4] = Vector2(w * 0.987, minf(ya + 0.075, y_zh - 0.02))
-	p[5] = Vector2(w, y_zh)
-	p[6] = Vector2(lerpf(w, ws, 0.4), lerpf(y_zh, y_sh, 0.55))
+	# выемка на боковине (scallop): линия максимальной ширины уходит внутрь
+	var sc := _cv("scallop", t) if _b.has("scallop") else 0.0
+	p[4] = Vector2(w * 0.987 - sc * 0.6, minf(ya + 0.075, y_zh - 0.02))
+	p[5] = Vector2(w - sc, y_zh)
+	p[6] = Vector2(lerpf(w, ws, 0.4) - sc * 0.4, lerpf(y_zh, y_sh, 0.55))
 	p[7] = Vector2(ws, y_sh)
 	var gw := ws * _cv("ghw", t)
 	var gt := minf(hw * _cv("ght", t), gw - 0.03)
@@ -356,6 +366,8 @@ func _build_body() -> void:
 		qn.append(row)
 	# ориентация наружу: середина правой боковины должна смотреть в +X
 	var sign := -1.0 if qn[int(ns / 2)][5].x < 0.0 else 1.0
+	# «острые» машины (клин) — меньший угол сглаживания, грани видны
+	var smooth_cos := cos(deg_to_rad(float(_b.get("smooth_deg", 40.0))))
 	for i in ns - 1:
 		var tm: float = (float(ts[i]) + float(ts[i + 1])) * 0.5
 		var gm: float = (float(secs[i]["g"]) + float(secs[i + 1]["g"])) * 0.5
@@ -384,7 +396,7 @@ func _build_body() -> void:
 						continue
 					for kk in [(j - 1 + RING) % RING, j]:
 						var qv: Vector3 = qn[sec][kk] * sign
-						if qv != Vector3.ZERO and qv.dot(fn) > SMOOTH_COS:
+						if qv != Vector3.ZERO and qv.dot(fn) > smooth_cos:
 							nsum += qv
 				nrm.append(nsum.normalized() if nsum.length_squared() > 1e-12 else fn)
 			_emit_tri(mat, [vs[0], vs[1], vs[2]], [nrm[0], nrm[1], nrm[2]], fn, [uvs[0], uvs[1], uvs[2]])
@@ -436,6 +448,8 @@ func _detail_texture() -> ImageTexture:
 # ---------------------------------------------------------------- вывод геометрии
 
 func _tool(key: String) -> SurfaceTool:
+	if _detail:
+		key = "~" + key
 	if not _tools.has(key):
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -551,18 +565,27 @@ func _lathe(key: String, profile: Array, segs: int, xf := Transform3D.IDENTITY, 
 			_emit_tri(key, [vv[0], vv[2], vv[3]], [nn[0], nn[2], nn[3]], fw)
 
 
+## Меши по материалам: основной и (если есть) меш мелких деталей с ключами «~материал».
 func _commit() -> Dictionary:
-	var mesh := ArrayMesh.new()
-	var slots := {}
-	for key in _tools:
-		var st: SurfaceTool = _tools[key]
-		st.commit(mesh)
-		var i := mesh.get_surface_count() - 1
-		slots[key] = i
-		if key != "paint" and key != "tail" and not key.begins_with("@"):
-			mesh.surface_set_material(i, shared(key))
+	var res := {}
+	for detail in [false, true]:
+		var mesh := ArrayMesh.new()
+		var slots := {}
+		for key: String in _tools:
+			if key.begins_with("~") != detail:
+				continue
+			var st: SurfaceTool = _tools[key]
+			st.commit(mesh)
+			var i := mesh.get_surface_count() - 1
+			var mat := key.trim_prefix("~")
+			slots[mat] = i
+			if mat != "paint" and mat != "tail" and not mat.begins_with("@"):
+				mesh.surface_set_material(i, shared(mat))
+		if mesh.get_surface_count() > 0:
+			res["detail" if detail else "main"] = {"mesh": mesh, "slots": slots}
 	_tools = {}
-	return {"mesh": mesh, "slots": slots}
+	var main: Dictionary = res.get("main", {"mesh": ArrayMesh.new(), "slots": {}})
+	return {"mesh": main["mesh"], "slots": main["slots"], "detail_part": res.get("detail", {})}
 
 
 # ---------------------------------------------------------------- проекции
@@ -600,7 +623,7 @@ func _end_t(x: float, y: float, rear: bool) -> float:
 				return float(arr[0][0])
 			var a: float = arr[i - 1][0]
 			var b: float = arr[i][0]
-			for k in 7:
+			for k in 5:
 				var m := (a + b) * 0.5
 				if Geometry2D.is_point_in_polygon(q, _sec(m)["p"]):
 					b = m
@@ -686,19 +709,142 @@ func _decal_poly(d: Dictionary) -> PackedVector2Array:
 
 
 ## Наклейка: многоугольник режется сеткой, куски проецируются на кузов.
+## raise — поднять над кузовом со стенками (хребты, лезвия, выпуклости);
+## rim [ширина, материал, высота] — ободок; с высотой он выступает, а внутренняя
+## стенка тёмная — заборник или фара выглядят утопленными;
+## bars {n, dir: h|v, w, m, h} — ламели или рёбра поверх заливки.
 func _decal(d: Dictionary) -> void:
 	var poly := _decal_poly(d)
 	var view: String = d["v"]
 	var unit := _unit(view)
 	var res: float = d.get("res", 0.06)
 	var lift: float = d.get("lift", 0.006)
+	var raise: float = d.get("raise", 0.0)
 	var sides := [1.0, -1.0] if d.get("sym", true) else [1.0]
 	var pieces := _grid(poly, Vector2(res, res) / unit)
 	for s: float in sides:
-		_project(pieces, d, s, d["m"], lift, poly)
+		_detail = d.get("detail", false)
+		_project(pieces, d, s, d["m"], lift, poly, raise)
+		_detail = true
+		if raise > 0.0:
+			_walls(d, s, poly, unit, minf(res, 0.05), lift * 0.5, 0.0, raise, d.get("wall", d["m"]), false)
 		if d.has("rim"):
 			var rim: Array = d["rim"]
-			_project(_outline(poly, float(rim[0]), unit, res), d, s, rim[1], lift + 0.002, poly)
+			var rh: float = float(rim[2]) if rim.size() > 2 else 0.0
+			_project(_outline(poly, float(rim[0]), unit, res), d, s, rim[1], lift + 0.002, poly, raise + rh)
+			if rh > 0.0:
+				var outer := _offset(poly, float(rim[0]), unit)
+				_walls(d, s, poly, unit, minf(res, 0.05), lift, raise, raise + rh + 0.002, d.get("inner", "dark"), true)
+				_walls(d, s, outer, unit, minf(res, 0.05), lift * 0.5, 0.0, raise + rh + 0.002, rim[1], false)
+		if d.has("bars"):
+			_bars(d, s, poly, unit, lift, raise)
+		_detail = false
+
+
+func _bars(d: Dictionary, s: float, poly: PackedVector2Array, unit: Vector2, lift: float, base: float) -> void:
+	var b: Dictionary = d["bars"]
+	var r := _bbox(poly)
+	var n: int = b.get("n", 5)
+	var vertical: bool = b.get("dir", "h") == "v"
+	var w: float = float(b.get("w", 0.012)) / (unit.x if vertical else unit.y)
+	var h: float = b.get("h", 0.008)
+	for i in n:
+		var f := (i + 0.5) / n
+		var rect: PackedVector2Array
+		if vertical:
+			var x := r.position.x + r.size.x * f
+			rect = PackedVector2Array([Vector2(x - w * 0.5, r.position.y), Vector2(x + w * 0.5, r.position.y),
+				Vector2(x + w * 0.5, r.end.y), Vector2(x - w * 0.5, r.end.y)])
+		else:
+			var y := r.position.y + r.size.y * f
+			rect = PackedVector2Array([Vector2(r.position.x, y - w * 0.5), Vector2(r.end.x, y - w * 0.5),
+				Vector2(r.end.x, y + w * 0.5), Vector2(r.position.x, y + w * 0.5)])
+		for piece in Geometry2D.intersect_polygons(rect, poly):
+			_project(_grid(piece, Vector2(0.05, 0.05) / unit), d, s, b.get("m", "trim"), lift, piece, base + h)
+			_walls(d, s, piece, unit, 0.05, lift, base, base + h, b.get("m", "trim"), false)
+
+
+## Точка поверхности и нормаль в ней (конечными разностями) для координат наклейки.
+func _pn(d: Dictionary, q: Vector2, s: float) -> Array:
+	var unit := _unit(d["v"])
+	var da := 0.01 / unit.x
+	var db := 0.01 / unit.y
+	var pr := _proj(d, q.x, q.y, s)
+	var e1: Vector3 = (_proj(d, q.x + da, q.y, s)[0] as Vector3) - (_proj(d, q.x - da, q.y, s)[0] as Vector3)
+	var e2: Vector3 = (_proj(d, q.x, q.y + db, s)[0] as Vector3) - (_proj(d, q.x, q.y - db, s)[0] as Vector3)
+	var n := e1.cross(e2)
+	n = n.normalized() if n.length_squared() > 1e-14 else (pr[1] as Vector3)
+	if n.dot(pr[1]) < 0.0:
+		n = -n
+	return [pr[0], n, pr[1]]
+
+
+## Насколько поверхность смотрит на зрителя вида: подъём деталей на скруглённых
+## углах уменьшается, иначе ободки торчат вбок «закрылками».
+func _facing(d: Dictionary, n: Vector3, dir: Vector3) -> float:
+	if d["v"] == "surf":
+		return 1.0
+	return clampf(n.dot(dir) * 1.3, 0.2, 1.0)
+
+
+## Стенка вдоль контура pts: от высоты lift + r0 до lift + r1 над кузовом (по нормали;
+## подъёмы r0/r1 уменьшаются на поверхностях, повёрнутых от зрителя).
+## inward — стенка смотрит внутрь контура (внутренняя сторона ободка).
+func _walls(d: Dictionary, s: float, pts: PackedVector2Array, unit: Vector2, res: float, lift: float, r0: float, r1: float,
+		mat: String, inward: bool) -> void:
+	var n := pts.size()
+	var metric := PackedVector2Array()
+	for q in pts:
+		metric.append(q * unit)
+	var cw := Geometry2D.is_polygon_clockwise(metric)
+	var cache := {}
+	var pn := func(q: Vector2) -> Array:
+		var key := Vector2i(roundi(q.x * 100000.0), roundi(q.y * 100000.0))
+		if not cache.has(key):
+			cache[key] = _pn(d, q, s)
+		return cache[key]
+	for i in n:
+		var a := pts[i]
+		var b := pts[(i + 1) % n]
+		var steps := maxi(1, ceili(metric[i].distance_to(metric[(i + 1) % n]) / res))
+		var e := (metric[(i + 1) % n] - metric[i]).normalized()
+		var o := Vector2(e.y, -e.x) * (-1.0 if cw else 1.0)
+		if inward:
+			o = -o
+		# направление «наружу» одно на всё ребро
+		var mid := (a + b) * 0.5
+		var probe := mid + o * 0.01 / unit
+		var out: Vector3 = (_proj(d, probe.x, probe.y, s)[0] as Vector3) - (_proj(d, mid.x, mid.y, s)[0] as Vector3)
+		for k in steps:
+			var p0 := a.lerp(b, float(k) / steps)
+			var p1 := a.lerp(b, float(k + 1) / steps)
+			var A: Array = pn.call(p0)
+			var B: Array = pn.call(p1)
+			var a3: Vector3 = A[0]
+			var b3: Vector3 = B[0]
+			var an: Vector3 = A[1]
+			var bn: Vector3 = B[1]
+			var fa := _facing(d, an, A[2])
+			var fb := _facing(d, bn, B[2])
+			_flat_quad(mat, a3 + an * (lift + r0 * fa), b3 + bn * (lift + r0 * fb), b3 + bn * (lift + r1 * fb), a3 + an * (lift + r1 * fa), out)
+
+
+## Многоугольник, расширенный наружу на width метров (в единицах наклейки).
+func _offset(poly: PackedVector2Array, width: float, unit: Vector2) -> PackedVector2Array:
+	var n := poly.size()
+	var m := PackedVector2Array()
+	for p in poly:
+		m.append(p * unit)
+	var sgn := -1.0 if Geometry2D.is_polygon_clockwise(m) else 1.0
+	var out := PackedVector2Array()
+	for i in n:
+		var e0 := (m[i] - m[(i - 1 + n) % n]).normalized()
+		var e1 := (m[(i + 1) % n] - m[i]).normalized()
+		var n0 := Vector2(e0.y, -e0.x) * sgn
+		var n1 := Vector2(e1.y, -e1.x) * sgn
+		var mid := (n0 + n1).normalized()
+		out.append((m[i] + mid * width / maxf(mid.dot(n0), 0.5)) / unit)
+	return out
 
 
 func _grid(poly: PackedVector2Array, cell: Vector2) -> Array:
@@ -754,7 +900,7 @@ func _outline(poly: PackedVector2Array, width: float, unit: Vector2, res: float)
 	return out
 
 
-func _project(pieces: Array, d: Dictionary, s: float, mat: String, lift: float, poly: PackedVector2Array) -> void:
+func _project(pieces: Array, d: Dictionary, s: float, mat: String, lift: float, poly: PackedVector2Array, raise := 0.0) -> void:
 	var r := _bbox(poly)
 	var cache := {}
 	var tris: Array = []
@@ -785,8 +931,8 @@ func _project(pieces: Array, d: Dictionary, s: float, mat: String, lift: float, 
 	# подъём над кузовом — по усреднённой нормали в вершине, чтобы не уходить под краску
 	var lifted := {}
 	for k in acc:
-		var an: Vector3 = acc[k]
-		lifted[k] = (cache[k][0] as Vector3) + an.normalized() * lift
+		var an: Vector3 = (acc[k] as Vector3).normalized()
+		lifted[k] = (cache[k][0] as Vector3) + an * (lift + raise * _facing(d, an, cache[k][1]))
 	for e in tris:
 		var tri: Array = e[0]
 		var fn: Vector3 = e[1]
@@ -858,11 +1004,22 @@ func build(def: Dictionary, paint_index: int, tune: Dictionary = {}) -> void:
 	brake_lights.emission_texture = Track.tex("taillight.png")
 	body = Node3D.new()
 	add_child(body)
-	for part: Dictionary in [cached, _body_cache[tune_key]]:
+	var tuned: Dictionary = _body_cache[tune_key]
+	var parts := [[cached, false], [cached["detail_part"], true]]
+	if not tuned.is_empty():
+		parts.append([tuned, false])
+		parts.append([tuned["detail_part"], true])
+	for entry in parts:
+		var part: Dictionary = entry[0]
 		if part.is_empty():
 			continue
 		var mi := MeshInstance3D.new()
 		mi.mesh = part["mesh"]
+		if entry[1]:
+			# мелочь (ободки, рёбра, линзы, эмблемы) вдали не видна — не рисуем и без теней
+			mi.visibility_range_end = 45.0
+			mi.visibility_range_end_margin = 5.0
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var slots: Dictionary = part["slots"]
 		if slots.has("paint"):
 			mi.set_surface_override_material(slots["paint"], paint)
@@ -1103,12 +1260,18 @@ func _wing(w: Dictionary) -> void:
 			Vector2(z + chord * 0.6, deck + h + chord * 0.32), Vector2(z - chord * 0.45, deck + h + chord * 0.18)])
 		for sd: float in [1.0, -1.0]:
 			_prism(w.get("plate_m", mat), pl, sd * span * 0.5 - 0.008, sd * span * 0.5 + 0.008, 0)
-	# стойки
+	# стойки; «лебединая шея» держит крыло сверху, огибая заднюю кромку
 	var px: float = w.get("posts", 0.3)
+	var swan: bool = w.get("swan", false)
 	for sd: float in [1.0, -1.0]:
 		var x := sd * span * px
 		var post := PackedVector2Array([Vector2(z - 0.02, deck - 0.03), Vector2(z + 0.12, deck - 0.03), Vector2(z + 0.08, deck + h),
 			Vector2(z - 0.06, deck + h)])
+		if swan:
+			var top := deck + h + chord * 0.2
+			post = PackedVector2Array([Vector2(z + chord * 0.6, deck - 0.03), Vector2(z + chord * 0.95, deck - 0.03),
+				Vector2(z + chord * 0.75, top + 0.05), Vector2(z + chord * 0.2, top + 0.06), Vector2(z - chord * 0.1, top + 0.02),
+				Vector2(z - chord * 0.1, top - 0.02), Vector2(z + chord * 0.2, top), Vector2(z + chord * 0.55, top - 0.02)])
 		_prism(w.get("post_m", mat), post, x - 0.012, x + 0.012, 0)
 
 
@@ -1241,6 +1404,12 @@ func _wheel_mesh(r: float, tw: float, rim_type: String) -> Dictionary:
 	var dish := 0.06
 	var hub_x := face - dish
 	_lathe("@rim", [Vector2(hub_x - 0.02, 0.085), Vector2(hub_x + 0.01, 0.08), Vector2(hub_x + 0.02, 0.05), Vector2(hub_x + 0.024, 0.0)], 12, Transform3D.IDENTITY, true)
+	# гайки и колпачок
+	for k in 5:
+		var ang := TAU * k / 5.0 + 0.3
+		var nut := Transform3D(Basis.IDENTITY, Vector3(0, cos(ang), sin(ang)) * 0.05)
+		_lathe("chrome", [Vector2(hub_x + 0.018, 0.011), Vector2(hub_x + 0.034, 0.011), Vector2(hub_x + 0.036, 0.0)], 6, nut, true)
+	_lathe("dark", [Vector2(hub_x + 0.024, 0.026), Vector2(hub_x + 0.03, 0.022), Vector2(hub_x + 0.032, 0.0)], 10)
 	# спицы
 	var spec: Dictionary = RIMS.get(rim_type, RIMS["five"])
 	var n: int = spec["n"]

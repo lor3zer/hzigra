@@ -48,8 +48,37 @@ func _setup_audio() -> void:
 			var i := AudioServer.bus_count - 1
 			AudioServer.set_bus_name(i, bus)
 			AudioServer.set_bus_send(i, "Master")
+	# моторы: свой канал с эквалайзером (больше низа, меньше «пилы» на 3-10 кГц)
+	# и мягким насыщением низов и середины — звук плотнее; суб-канал — октава ниже
+	for bus in ["Engine", "EngineSub"]:
+		if AudioServer.get_bus_index(bus) == -1:
+			AudioServer.add_bus()
+			var j := AudioServer.bus_count - 1
+			AudioServer.set_bus_name(j, bus)
+			AudioServer.set_bus_send(j, "SFX")
+	var eng := AudioServer.get_bus_index("Engine")
+	var eq := AudioEffectEQ6.new()
+	for b in 6:
+		eq.set_band_gain_db(b, [-2.0, 5.0, 4.0, 1.0, -2.0, -6.0][b])
+	AudioServer.add_bus_effect(eng, eq)
+	var sat := AudioEffectDistortion.new()
+	sat.mode = AudioEffectDistortion.MODE_ATAN
+	sat.drive = 0.35
+	sat.pre_gain = -2.0
+	sat.post_gain = 1.0
+	sat.keep_hf_hz = 2500.0
+	AudioServer.add_bus_effect(eng, sat)
+	var sub := AudioServer.get_bus_index("EngineSub")
+	# 70-260 Гц: ниже телефонный динамик всё равно не играет, а запас громкости съедает
+	var hp := AudioEffectHighPassFilter.new()
+	hp.cutoff_hz = 70.0
+	AudioServer.add_bus_effect(sub, hp)
+	var lp := AudioEffectLowPassFilter.new()
+	lp.cutoff_hz = 260.0
+	AudioServer.add_bus_effect(sub, lp)
+	AudioServer.set_bus_volume_db(sub, 3.0)
 	var lim := AudioEffectHardLimiter.new()
-	lim.pre_gain_db = 2.0
+	lim.pre_gain_db = 3.5
 	lim.ceiling_db = -0.5
 	lim.release = 0.12
 	AudioServer.add_bus_effect(0, lim)

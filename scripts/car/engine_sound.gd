@@ -14,6 +14,7 @@ var local := false
 var _lo: Node
 var _hi: Node
 var _off: Node
+var _sub: Node
 var _turbo: Node
 var _screech: Node
 var _wind: Node
@@ -54,7 +55,7 @@ static func _db(g: float) -> float:
 func setup(c: Car, is_local: bool) -> void:
 	car = c
 	local = is_local
-	_gain = -1.0 if is_local else 2.0
+	_gain = 1.0 if is_local else 3.0
 	car.shifted.connect(_on_shift)
 	refresh()
 
@@ -65,9 +66,11 @@ func refresh() -> void:
 		ch.queue_free()
 	_shots.clear()
 	var k: String = car.eng.get("samples", car.def.get("engine", "v8x"))
-	_lo = _loop("eng_%s_lo" % k)
-	_hi = _loop("eng_%s_hi" % k)
-	_off = _loop("eng_%s_off" % k) if local else null
+	_lo = _loop("eng_%s_lo" % k, "Engine")
+	_hi = _loop("eng_%s_hi" % k, "Engine")
+	_off = _loop("eng_%s_off" % k, "Engine") if local else null
+	# суб-слой: тот же звук на октаву ниже через фильтр — «грудь» мотора
+	_sub = _loop("eng_%s_lo" % k, "EngineSub") if local else null
 	_turbo = _loop("turbo") if local and bool(car.eng["turbo"]) else null
 	_screech = _loop("screech")
 	_wind = _loop("wind") if local else null
@@ -75,7 +78,7 @@ func refresh() -> void:
 		_shots.append(_player(null))
 
 
-func _player(s: AudioStream) -> Node:
+func _player(s: AudioStream, bus := "SFX") -> Node:
 	var p: Node
 	if local:
 		p = AudioStreamPlayer.new()
@@ -86,13 +89,13 @@ func _player(s: AudioStream) -> Node:
 		p3.max_db = 3.0
 		p = p3
 	p.stream = s
-	p.bus = "SFX"
+	p.bus = bus
 	add_child(p)
 	return p
 
 
-func _loop(name: String) -> Node:
-	var p := _player(stream(name, true))
+func _loop(name: String, bus := "SFX") -> Node:
+	var p := _player(stream(name, true), bus)
 	p.volume_db = -80.0
 	p.play()
 	return p
@@ -117,8 +120,8 @@ func _on_shift(up: bool) -> void:
 	if local:
 		shot("shift", 0.35, randf_range(0.9, 1.1))
 	# "выстрел" при переключении под нагрузкой (как у роботизированных коробок)
-	if up and car.throttle_level > 0.6 and bool(car.eng["pops"]):
-		shot("pop0", 0.45, randf_range(1.1, 1.4))
+	if up and car.throttle_level > 0.6 and bool(car.eng["pops"]) and randf() < 0.7:
+		shot("pop3" if randf() < 0.3 else "pop0", randf_range(0.55, 0.8), randf_range(0.9, 1.1))
 		car.model.backfire()
 
 
@@ -149,6 +152,9 @@ func _process(dt: float) -> void:
 	if _off:
 		_off.volume_db = _db((1.0 - load) * 0.8) + _gain
 		_off.pitch_scale = clampf(rpm / float(e["off_rpm"]), 0.15, 4.0)
+	if _sub:
+		_sub.volume_db = _db(lerpf(0.45, 1.0, load)) + _gain
+		_sub.pitch_scale = clampf(rpm / lo_rpm * 0.5, 0.1, 4.0)
 
 	# турбина
 	var throttle_now := car.in_throttle if local else load
@@ -167,19 +173,21 @@ func _process(dt: float) -> void:
 			var flutter: bool = car.def.get("engine", "") in ["i4t", "i6t"]
 			shot("flutter" if flutter else "bov", 0.2 + 0.3 * _boost, randf_range(0.95, 1.1))
 		if bool(e["pops"]):
-			for i in randi_range(2, 5):
-				_pops.append(_t + randf_range(0.05, 0.9))
+			for i in randi_range(1, 3):
+				_pops.append(_t + randf_range(0.05, 0.8))
 	_prev_throttle = throttle_now
 	for i in range(_pops.size() - 1, -1, -1):
 		if _t >= _pops[i]:
 			_pops.remove_at(i)
-			shot("pop%d" % (randi() % 3), randf_range(0.5, 0.9), randf_range(0.85, 1.2))
+			shot("pop%d" % [0, 1, 2, 4].pick_random(), randf_range(0.6, 1.0), randf_range(0.85, 1.15))
 			car.model.backfire()
 
 	# шины
+	# шины: только при заметном скольжении и заметно тише мотора
 	var s := clampf(car.slip, 0.0, 1.0)
-	_screech.volume_db = _db(s * 0.75)
-	_screech.pitch_scale = 0.9 + 0.2 * s
+	var sq := smoothstep(0.35, 1.0, s)
+	_screech.volume_db = _db(sq * 0.28)
+	_screech.pitch_scale = 0.92 + 0.12 * s
 
 	# ветер
 	if _wind:
